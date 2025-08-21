@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { ChevronDown } from "lucide-react"
+import { ChevronDown, Info, Shield, Key, FileCheck } from "lucide-react"
 
 interface CustomKeyTesterProps {
   isCollapsible?: boolean
@@ -16,6 +16,7 @@ export function CustomKeyTester({ isCollapsible = false, defaultCollapsed = fals
   const [isLoading, setIsLoading] = useState(false)
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed)
   const [showPrivateKey, setShowPrivateKey] = useState(false)
+  const [showInfoDetails, setShowInfoDetails] = useState(false)
 
 
 
@@ -123,7 +124,49 @@ export function CustomKeyTester({ isCollapsible = false, defaultCollapsed = fals
         </div>
       </CardHeader>
       {!isCollapsed && (
-        <CardContent className="space-y-4">
+        <>
+          {/* Privacy and Security Info Block */}
+          <CardContent className="pt-0">
+            <div className="rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/20 p-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm text-blue-800 dark:text-blue-200">
+                  <Shield className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                  <span>All data is processed locally in your browser</span>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowInfoDetails(!showInfoDetails)}
+                  className="text-blue-600 dark:text-blue-400 h-6 px-2 text-xs"
+                >
+                  {showInfoDetails ? "Hide" : "Details"}
+                </Button>
+              </div>
+              
+              {showInfoDetails && (
+                <div className="mt-3 pt-3 border-t border-blue-200 dark:border-blue-800 space-y-2 text-sm">
+                  <div className="space-y-2 text-blue-800 dark:text-blue-200">
+                    <p className="flex items-start gap-2">
+                      <Shield className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                      <span><strong>Local Processing:</strong> All data (private keys, messages, signatures) is processed exclusively in your browser and never transmitted to external servers.</span>
+                    </p>
+                    
+                    <p className="flex items-start gap-2">
+                      <Key className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                      <span><strong>Signing Process:</strong> Your private key is used to create a digital signature of the message using the Ed25519 cryptographic algorithm.</span>
+                    </p>
+                    
+                    <p className="flex items-start gap-2">
+                      <FileCheck className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                      <span><strong>Verification:</strong> The generated signature is compared with the target signature to verify the correctness of your private key.</span>
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </CardContent>
+          
+          <CardContent className="space-y-4 pt-0">
         <div className="space-y-3">
           <div>
             <div className="flex items-center justify-between">
@@ -215,6 +258,7 @@ export function CustomKeyTester({ isCollapsible = false, defaultCollapsed = fals
           </div>
         )}
         </CardContent>
+        </>
       )}
     </Card>
   )
