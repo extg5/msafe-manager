@@ -1,10 +1,12 @@
 import { useWallet } from "@aptos-labs/wallet-adapter-react"
 import { WalletConnector } from "@/components/wallet-connector"
+import { WalletInfo } from "@/components/wallet-info"
+import { CustomKeyTester } from "@/components/custom-key-tester"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
 function App() {
-  const { account, connected, network } = useWallet()
+  const { account, connected } = useWallet()
 
   return (
     <div className="min-h-screen bg-background">
@@ -31,62 +33,30 @@ function App() {
             </p>
           </div>
 
-          {connected && account ? (
-            <div className="space-y-4">
+          <div className="space-y-6">
+            {connected && account ? (
+              <WalletInfo />
+            ) : (
               <Card>
                 <CardHeader>
-                  <CardTitle>Wallet Information</CardTitle>
+                  <CardTitle>Connect Your Wallet</CardTitle>
                   <CardDescription>
-                    Your connected wallet details
+                    Please connect your Aptos wallet to continue
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-sm font-medium text-muted-foreground">
-                        Address
-                      </label>
-                      <div className="mt-1 p-3 bg-muted rounded-md font-mono text-sm break-all">
-                        {account.address.toString()}
-                      </div>
-                    </div>
-                    <div>
-                      <label className="text-sm font-medium text-muted-foreground">
-                        Public Key
-                      </label>
-                      <div className="mt-1 p-3 bg-muted rounded-md font-mono text-sm break-all">
-                        {account.publicKey.toString()}
-                      </div>
-                    </div>
+                <CardContent>
+                  <div className="flex justify-center">
+                    <WalletConnector />
                   </div>
-                  {network && (
-                    <div>
-                      <label className="text-sm font-medium text-muted-foreground">
-                        Network
-                      </label>
-                      <div className="mt-1 p-3 bg-muted rounded-md">
-                        {network.name}
-                      </div>
-                    </div>
-                  )}
                 </CardContent>
               </Card>
-            </div>
-          ) : (
-            <Card>
-              <CardHeader>
-                <CardTitle>Connect Your Wallet</CardTitle>
-                <CardDescription>
-                  Please connect your Aptos wallet to continue
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex justify-center">
-                  <WalletConnector />
-                </div>
-              </CardContent>
-            </Card>
-          )}
+            )}
+            
+            <CustomKeyTester 
+              isCollapsible={true} 
+              defaultCollapsed={!connected || !account} 
+            />
+          </div>
         </div>
       </main>
     </div>
