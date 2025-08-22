@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils"
 import { CheckCircle, AlertCircle, Info } from "lucide-react"
 
 interface StatusIndicatorProps {
-  type: "success" | "warning" | "info"
+  type: "success" | "warning" | "info" | "default"
   message: string
   className?: string
 }
@@ -21,9 +21,13 @@ export function StatusIndicator({ type, message, className }: StatusIndicatorPro
           icon: AlertCircle
         }
       case "info":
-      default:
         return {
           container: "text-blue-600 dark:text-blue-400",
+          icon: Info
+        }
+      default:
+        return {
+          container: "text-muted-foreground",
           icon: Info
         }
     }

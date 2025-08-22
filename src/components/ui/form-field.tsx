@@ -4,7 +4,7 @@ import { Label } from "./label"
 
 interface FormFieldProps {
   label?: string
-  description?: string
+  description?: string | React.ReactNode
   error?: string
   required?: boolean
   children: React.ReactNode
@@ -29,9 +29,9 @@ export function FormField({
       )}
       {children}
       {description && (
-        <p className="text-xs text-muted-foreground">
+        <div className="text-xs text-muted-foreground">
           {description}
-        </p>
+        </div>
       )}
       {error && (
         <p className="text-xs text-red-500 dark:text-red-400">

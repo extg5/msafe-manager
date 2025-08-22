@@ -47,43 +47,49 @@ export function PrivateKeyInput({
 
   const status = getKeyStatus()
 
+  const handleClick = (e: React.MouseEvent<HTMLInputElement>) => {
+    e.currentTarget.select()
+  }
+
   return (
     <FormField 
       label={label}
-      description="64 hex characters, with or without 0x prefix"
-      required={required}
-      className={className}
-    >
-      <div className="space-y-2">
-        <div className="relative">
-          <Input
-            type={showKey ? "text" : "password"}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder={placeholder}
-            className="font-mono text-sm pr-12"
-          />
-          {value && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowKey(!showKey)}
-              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
-            >
-              {showKey ? (
-                <EyeOff className="h-3 w-3" />
-              ) : (
-                <Eye className="h-3 w-3" />
-              )}
-            </Button>
-          )}
-        </div>
-        {status && (
+      description={
+        status ? (
           <StatusIndicator 
             type={status.type}
             message={status.message}
           />
+        ) : (
+          "64 hex characters, with or without 0x prefix"
+        )
+      }
+      required={required}
+      className={className}
+    >
+      <div className="relative">
+        <Input
+          type={showKey ? "text" : "password"}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onClick={handleClick}
+          placeholder={placeholder}
+          className="font-mono text-sm pr-12"
+        />
+        {value && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowKey(!showKey)}
+            className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
+          >
+            {showKey ? (
+              <EyeOff className="h-3 w-3" />
+            ) : (
+              <Eye className="h-3 w-3" />
+            )}
+          </Button>
         )}
       </div>
     </FormField>

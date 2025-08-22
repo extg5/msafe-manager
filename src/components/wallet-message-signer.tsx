@@ -1,9 +1,11 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useWallet } from "@aptos-labs/wallet-adapter-react"
 import { Hex } from "@aptos-labs/ts-sdk"
 
 import { Button } from "@/components/ui/button"
 import { LoadingButton } from "@/components/ui/loading-button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { WalletModal } from "./wallet-modal"
 import { SignatureDisplay } from "./signature-display"
 import { MessageHexInput } from "./message-hex-input"
@@ -20,8 +22,18 @@ export function WalletMessageSigner({ onSignatureChange }: WalletMessageSignerPr
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false)
+  const [useNewFormat, setUseNewFormat] = useState(false)
 
-  const { signMessage, connected, account } = useWallet()
+  const { signMessage, connected, account, wallet } = useWallet()
+
+  useEffect(() => {
+    console.log('account', account)
+    console.log('wallet', wallet)
+    // @ts-expect-error test
+    console.log('wallet.signMessage', wallet.signMessage)
+    // @ts-expect-error test
+    console.log('wallet.signMessageV2', wallet.signMessageV2)
+  }, [account, wallet])
 
   const signMessageWithWallet = async () => {
     if (!signMessage || !connected || !account) {
@@ -51,10 +63,13 @@ export function WalletMessageSigner({ onSignatureChange }: WalletMessageSignerPr
       // console.log('original hex:', cleanHex)
       // console.log('message for wallet:', message)
       // Sign message through wallet adapter
+
+      const pontemOpts = { useNewFormat }
       const response = await signMessage({
         message: messageHex.trim(),
-        nonce: ''
-      })
+        nonce: '',
+        // @ts-expect-error - useNewFormat is an optional wallet-specific option
+      }, pontemOpts)
 
       // Convert signature to hex with proper type handling
       if (response && response.signature) {
@@ -129,6 +144,23 @@ export function WalletMessageSigner({ onSignatureChange }: WalletMessageSignerPr
         value={messageHex}
         onChange={setMessageHex}
       />
+
+      {/* Options */}
+      <div className="flex items-center space-x-2">
+        <Input
+          type="checkbox"
+          id="useNewFormat"
+          checked={useNewFormat}
+          onChange={(e) => setUseNewFormat(e.target.checked)}
+          className="h-4 w-4"
+        />
+        <Label
+          htmlFor="useNewFormat"
+          className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+        >
+          Use new format (Pontem only)
+        </Label>
+      </div>
 
       {/* Actions */}
       <div className="flex gap-2">
