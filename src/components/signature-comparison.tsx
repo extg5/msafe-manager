@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react"
 import { GitCompare } from "lucide-react"
 import { ResultPanel } from "./result-panel"
+import { TargetSignatureInput } from "@/components/form"
+import { FormField } from "@/components/ui/form-field"
 import { 
   Select,
   SelectContent,
@@ -78,25 +80,13 @@ export function SignatureComparison({
       variant={comparisonResult ? (comparisonResult.isMatch ? "success" : "error") : "info"}
     >
       <div className="space-y-4">
-        {/* Target Signature Input */}
-        <div>
-          <label className="text-sm font-medium text-muted-foreground mb-2 block">
-            Target Signature (for verification)
-          </label>
-          <textarea
-            value={targetSignature}
-            onChange={(e) => setTargetSignature(e.target.value)}
-            placeholder="Enter expected signature for verification..."
-            className="w-full p-3 bg-background rounded-md font-mono text-sm resize-none focus:ring-2 focus:ring-primary/20 focus:border-primary border"
-            rows={2}
-          />
-        </div>
+        <TargetSignatureInput
+          value={targetSignature}
+          onChange={setTargetSignature}
+          label="Target Signature (for verification)"
+        />
 
-        {/* Selection Controls */}
-        <div>
-          <label className="text-sm font-medium text-muted-foreground mb-2 block">
-            Select Signature to Compare with Target
-          </label>
+        <FormField label="Select Signature to Compare with Target">
           <Select 
             value={selectedSignature || ""} 
             onValueChange={(value: "wallet" | "custom") => onChangeSelectedSignature(value)}
@@ -116,25 +106,20 @@ export function SignatureComparison({
               ))}
             </SelectContent>
           </Select>
-        </div>
+        </FormField>
 
-        {/* Selected Signature Display */}
         {selectedSignature && (
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <label className="text-sm font-medium text-muted-foreground">
-                {selectedSignature === "wallet" ? "Wallet Signature" : "Custom Key Signature"} (Selected)
-              </label>
-            </div>
+          <FormField 
+            label={`${selectedSignature === "wallet" ? "Wallet Signature" : "Custom Key Signature"} (Selected)`}
+          >
             <div className="p-3 bg-background rounded-md font-mono text-sm break-all border">
               {selectedSignature === "wallet" ? walletSignature : customSignature}
             </div>
-          </div>
+          </FormField>
         )}
 
 
 
-        {/* Status Messages */}
         {!hasTargetSignature && (
           <div className="p-4 bg-muted rounded-md border">
             <div className="text-sm text-muted-foreground">

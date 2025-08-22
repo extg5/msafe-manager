@@ -3,9 +3,11 @@ import { useWallet } from "@aptos-labs/wallet-adapter-react"
 import { Hex } from "@aptos-labs/ts-sdk"
 
 import { Button } from "@/components/ui/button"
+import { LoadingButton } from "@/components/ui/loading-button"
 import { WalletModal } from "./wallet-modal"
 import { SignatureDisplay } from "./signature-display"
-import { MessageHexInput, hexUtils } from "./message-hex-input"
+import { MessageHexInput } from "./message-hex-input"
+import { hexUtils } from "@/components/form"
 import { ErrorDisplay } from "./error-display"
 
 interface WalletMessageSignerProps {
@@ -130,20 +132,15 @@ export function WalletMessageSigner({ onSignatureChange }: WalletMessageSignerPr
 
       {/* Actions */}
       <div className="flex gap-2">
-        <Button 
+        <LoadingButton 
           onClick={signMessageWithWallet}
-          disabled={isLoading || !messageHex.trim() || !connected}
+          disabled={!messageHex.trim() || !connected}
+          loading={isLoading}
+          loadingText="Signing..."
           className="flex-1"
         >
-          {isLoading ? (
-            <>
-              <span className="animate-spin mr-2">⟳</span>
-              Signing...
-            </>
-          ) : (
-            "Sign Message"
-          )}
-        </Button>
+          Sign Message
+        </LoadingButton>
         <Button 
           variant="outline" 
           onClick={clearResults}

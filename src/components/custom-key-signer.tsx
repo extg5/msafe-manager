@@ -1,9 +1,9 @@
 import { useState } from "react"
-
 import { Button } from "@/components/ui/button"
-import { Eye, EyeOff } from "lucide-react"
+import { LoadingButton } from "@/components/ui/loading-button"
 import { SignatureDisplay } from "./signature-display"
 import { MessageHexInput } from "./message-hex-input"
+import { PrivateKeyInput } from "@/components/form"
 
 interface CustomKeySignerProps {
   onSignatureChange?: (signature: string) => void
@@ -15,26 +15,8 @@ export function CustomKeySigner({ onSignatureChange }: CustomKeySignerProps) {
 
   const [signature, setSignature] = useState("")
   const [isLoading, setIsLoading] = useState(false)
-  const [showPrivateKey, setShowPrivateKey] = useState(false)
   const [showSignatureDetails] = useState(true)
 
-
-
-
-  const getKeyStatus = () => {
-    if (!privateKey.trim()) return ""
-    
-    let cleanKey = privateKey.trim()
-    if (cleanKey.startsWith('0x')) {
-      cleanKey = cleanKey.slice(2)
-    }
-    
-    if (cleanKey.length === 64) {
-      return `✓ Key entered: ${cleanKey.slice(0, 4)}...${cleanKey.slice(-4)}`
-    } else {
-      return `⚠ Invalid key length: ${cleanKey.length}/64 chars`
-    }
-  }
 
   const signWithCustomKey = async () => {
     setIsLoading(true)
@@ -96,46 +78,11 @@ export function CustomKeySigner({ onSignatureChange }: CustomKeySignerProps) {
       {/* Form Fields */}
       <div className="space-y-4">
         {/* Private Key */}
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-medium text-muted-foreground">
-              Private Key (64 hex chars, with or without 0x prefix)
-            </label>
-            {privateKey && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowPrivateKey(!showPrivateKey)}
-                className="text-xs h-6 px-2"
-              >
-                {showPrivateKey ? (
-                  <>
-                    <EyeOff className="h-3 w-3 mr-1" />
-                    Hide
-                  </>
-                ) : (
-                  <>
-                    <Eye className="h-3 w-3 mr-1" />
-                    Show
-                  </>
-                )}
-              </Button>
-            )}
-          </div>
-          <input
-            type={showPrivateKey ? "text" : "password"}
-            value={privateKey}
-            onChange={(e) => setPrivateKey(e.target.value)}
-            placeholder="Enter your private key..."
-            className="w-full p-3 bg-muted rounded-md font-mono text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary"
-          />
-          {privateKey && (
-            <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-              {getKeyStatus()}
-            </div>
-          )}
-        </div>
+        <PrivateKeyInput
+          value={privateKey}
+          onChange={setPrivateKey}
+          required
+        />
         
         {/* Message Hex */}
         <MessageHexInput 
@@ -143,26 +90,19 @@ export function CustomKeySigner({ onSignatureChange }: CustomKeySignerProps) {
           onChange={setMessageHex}
           label="Message Hex"
         />
-        
-
       </div>
 
       {/* Actions */}
       <div className="flex gap-2">
-        <Button 
+        <LoadingButton 
           onClick={signWithCustomKey}
-          disabled={isLoading || !privateKey.trim()}
+          disabled={!privateKey.trim()}
+          loading={isLoading}
+          loadingText="Signing..."
           className="flex-1"
         >
-          {isLoading ? (
-            <>
-              <span className="animate-spin mr-2">⟳</span>
-              Signing...
-            </>
-          ) : (
-            "Sign Message"
-          )}
-        </Button>
+          Sign Message
+        </LoadingButton>
         <Button 
           variant="outline" 
           onClick={clearSignature}
@@ -178,8 +118,6 @@ export function CustomKeySigner({ onSignatureChange }: CustomKeySignerProps) {
         showDetails={showSignatureDetails}
         onClose={clearSignature}
       />
-
-
     </div>
   )
 }
