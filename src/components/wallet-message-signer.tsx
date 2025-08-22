@@ -8,7 +8,11 @@ import { SignatureDisplay } from "./signature-display"
 import { MessageHexInput, hexUtils } from "./message-hex-input"
 import { ErrorDisplay } from "./error-display"
 
-export function WalletMessageSigner() {
+interface WalletMessageSignerProps {
+  onSignatureChange?: (signature: string) => void
+}
+
+export function WalletMessageSigner({ onSignatureChange }: WalletMessageSignerProps) {
   const [messageHex, setMessageHex] = useState("b5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb010000000000000002000000000000000000000000000000000000000000000000000000000000000104636f696e087472616e73666572010700000000000000000000000000000000000000000000000000000000000000010a6170746f735f636f696e094170746f73436f696e000220a5a18e45d7086798c4e81cbb9d61cdbd131c74a9f8151ed11f1732c73fc9c718080065cd1d00000000e80300000000000078000000000000006a39ac680000000001")
   const [signature, setSignature] = useState("")
   const [isLoading, setIsLoading] = useState(false)
@@ -71,18 +75,28 @@ export function WalletMessageSigner() {
         }
         
         // Convert to string format
+        let finalSignature = ""
         if (typeof processedSignature === 'string') {
+          finalSignature = processedSignature
           setSignature(processedSignature)
         } else if (processedSignature instanceof Uint8Array) {
           // If signature is in bytes, convert to hex
           const hexSignature = Hex.fromHexInput(processedSignature).toString()
+          finalSignature = hexSignature
           setSignature(hexSignature)
         } else if (processedSignature && typeof processedSignature === 'object' && 'toString' in processedSignature) {
           // Try to use toString method if available
           const stringifiedSignature = (processedSignature as { toString(): string }).toString()
+          finalSignature = stringifiedSignature
           setSignature(stringifiedSignature)
         } else {
+          finalSignature = JSON.stringify(processedSignature)
           setSignature(JSON.stringify(processedSignature))
+        }
+        
+        // Notify parent component
+        if (onSignatureChange) {
+          onSignatureChange(finalSignature)
         }
       } else {
         setError("Failed to get signature")
@@ -99,6 +113,9 @@ export function WalletMessageSigner() {
   const clearResults = () => {
     setSignature("")
     setError("")
+    if (onSignatureChange) {
+      onSignatureChange("")
+    }
   }
 
 

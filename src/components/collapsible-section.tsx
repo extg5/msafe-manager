@@ -5,7 +5,7 @@ import { ChevronDown } from "lucide-react"
 import { type LucideProps } from "lucide-react"
 
 interface CollapsibleSectionProps {
-  title: string
+  title: ReactNode
   description: string
   icon: React.ComponentType<LucideProps>
   iconColor: string

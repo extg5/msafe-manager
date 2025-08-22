@@ -10,6 +10,7 @@ interface ResultPanelProps {
   children: ReactNode
   className?: string
   onClose?: () => void
+  headerActions?: ReactNode
 }
 
 export function ResultPanel({
@@ -18,7 +19,8 @@ export function ResultPanel({
   variant,
   children,
   className = "",
-  onClose
+  onClose,
+  headerActions
 }: ResultPanelProps) {
   const getVariantClasses = () => {
     switch (variant) {
@@ -49,6 +51,11 @@ export function ResultPanel({
         <div className="flex items-center gap-2">
           <Icon className="h-4 w-4" />
           <span className="font-medium">{title}</span>
+          {headerActions && (
+            <div className="ml-3">
+              {headerActions}
+            </div>
+          )}
         </div>
         {onClose && (
           <Button
