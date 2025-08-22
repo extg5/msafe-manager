@@ -23,17 +23,22 @@ export function WalletConnector() {
 
   const copyAddress = async () => {
     if (account?.address) {
-      await navigator.clipboard.writeText(account.address.toString())
+      try {
+        await navigator.clipboard.writeText(account.address.toString())
+      } catch (err) {
+        console.error('Failed to copy address:', err)
+      }
     }
   }
 
-  if (connected && account) {
+  if (connected && account?.address) {
+    const addressString = account.address.toString()
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="outline" className="gap-2">
             <Wallet className="h-4 w-4" />
-            {account.address.toString().slice(0, 6)}...{account.address.toString().slice(-4)}
+            {addressString.slice(0, 6)}...{addressString.slice(-4)}
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-64">
@@ -42,9 +47,9 @@ export function WalletConnector() {
               <img src={connectedWallet.icon} alt={connectedWallet.name} className="h-6 w-6" />
             )}
             <div>
-              <div className="font-medium">{connectedWallet?.name}</div>
+              <div className="font-medium">{connectedWallet?.name || 'Unknown Wallet'}</div>
               <div className="text-sm text-muted-foreground">
-                {account.address.toString().slice(0, 8)}...{account.address.toString().slice(-8)}
+                {addressString.slice(0, 8)}...{addressString.slice(-8)}
               </div>
             </div>
           </div>
@@ -67,7 +72,7 @@ export function WalletConnector() {
             </DropdownMenuItem>
           )}
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={disconnect} className="gap-2 text-red-600">
+          <DropdownMenuItem onClick={disconnect} className="gap-2">
             <LogOut className="h-4 w-4" />
             Disconnect
           </DropdownMenuItem>
