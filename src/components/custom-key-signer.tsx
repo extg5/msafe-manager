@@ -1,8 +1,10 @@
 import { useState } from "react"
 
 import { Button } from "@/components/ui/button"
-import { Eye, EyeOff, CheckCircle, FileCheck, AlertCircle, X, ChevronDown } from "lucide-react"
+import { Eye, EyeOff, CheckCircle, FileCheck, AlertCircle } from "lucide-react"
 import { SignatureDisplay } from "./signature-display"
+import { MessageHexInput } from "./message-hex-input"
+import { ResultPanel } from "./result-panel"
 
 export function CustomKeySigner() {
   const [privateKey, setPrivateKey] = useState("")
@@ -13,8 +15,8 @@ export function CustomKeySigner() {
   const [isLoading, setIsLoading] = useState(false)
   const [showPrivateKey, setShowPrivateKey] = useState(false)
   const [isSuccess, setIsSuccess] = useState<boolean | null>(null)
-  const [showSignatureDetails, setShowSignatureDetails] = useState(true)
-  const [showResultsDetails, setShowResultsDetails] = useState(true)
+  const [showSignatureDetails] = useState(true)
+
 
 
 
@@ -55,12 +57,12 @@ export function CustomKeySigner() {
       
       let privateKeyHex = privateKey.trim()
       
-      // Убираем 0x префикс если он есть
+      // Remove 0x prefix if present
       if (privateKeyHex.startsWith('0x')) {
         privateKeyHex = privateKeyHex.slice(2)
       }
       
-      // Проверяем длину ключа
+      // Check key length
       if (privateKeyHex.length !== 64) {
         throw new Error(`Private key must be exactly 64 hex characters (32 bytes), got ${privateKeyHex.length}`)
       }
@@ -71,7 +73,7 @@ export function CustomKeySigner() {
       const signature = account.sign(`0x${messageHex}`)
       const signatureStr = signature.toString()
       
-      // Сохраняем сигнатуру в состоянии
+      // Save signature to state
       setSignature(signatureStr)
       
       log(`Private key: 0x${privateKeyHex}`)
@@ -80,7 +82,7 @@ export function CustomKeySigner() {
       log(`Message: 0x${messageHex}`)
       log(`Signature: ${signatureStr}`)
       
-      // Проверяем подпись
+      // Verify signature
       const isValid = signatureStr === targetSignature
       log(`Signatures matched: ${isValid}`)
       
@@ -105,6 +107,10 @@ export function CustomKeySigner() {
     setResults([])
     setSignature("")
     setIsSuccess(null)
+  }
+
+  const clearSignature = () => {
+    setSignature("")
   }
 
 
@@ -156,18 +162,11 @@ export function CustomKeySigner() {
         </div>
         
         {/* Message Hex */}
-        <div>
-          <label className="text-sm font-medium text-muted-foreground">
-            Message Hex
-          </label>
-          <textarea
-            value={messageHex}
-            onChange={(e) => setMessageHex(e.target.value)}
-            placeholder="Enter hex message to sign..."
-            className="mt-1 w-full p-3 bg-muted rounded-md font-mono text-sm resize-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-            rows={4}
-          />
-        </div>
+        <MessageHexInput 
+          value={messageHex}
+          onChange={setMessageHex}
+          label="Message Hex"
+        />
         
         {/* Target Signature */}
         <div>
@@ -206,70 +205,25 @@ export function CustomKeySigner() {
       <SignatureDisplay 
         signature={signature} 
         showDetails={showSignatureDetails}
-        onToggleDetails={() => setShowSignatureDetails(!showSignatureDetails)}
+        onClose={clearSignature}
       />
 
       {/* Results */}
       {results.length > 0 && (
-        <div className={`rounded-lg border p-4 ${
-          isSuccess === true 
-            ? "border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20" 
-            : isSuccess === false 
-            ? "border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950/20" 
-            : "border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/20"
-        }`}>
-          <div className={`flex items-center justify-between mb-3 ${
-            isSuccess === true 
-              ? "text-green-800 dark:text-green-200" 
-              : isSuccess === false 
-              ? "text-red-800 dark:text-red-200" 
-              : "text-blue-800 dark:text-blue-200"
-          }`}>
-            <div className="flex items-center gap-2">
-              {isSuccess === true ? (
-                <CheckCircle className="h-4 w-4" />
-              ) : isSuccess === false ? (
-                <AlertCircle className="h-4 w-4" />
-              ) : (
-                <FileCheck className="h-4 w-4" />
-              )}
-              <span className="font-medium">
-                {isSuccess === true ? "Signature Verification: Success" : isSuccess === false ? "Signature Verification: Failed" : "Processing Results"}
-              </span>
-            </div>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowResultsDetails(!showResultsDetails)}
-                className="h-6 w-6 p-0 hover:bg-transparent"
-              >
-                <ChevronDown 
-                  className={`h-4 w-4 transition-transform duration-200 ${
-                    showResultsDetails ? "scale-100" : "-scale-100"
-                  }`}
-                />
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={clearResults}
-                className="h-6 w-6 p-0 hover:bg-transparent"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
+        <ResultPanel
+          title={isSuccess === true ? "Signature Verification: Success" : isSuccess === false ? "Signature Verification: Failed" : "Processing Results"}
+          icon={isSuccess === true ? CheckCircle : isSuccess === false ? AlertCircle : FileCheck}
+          variant={isSuccess === true ? "success" : isSuccess === false ? "error" : "info"}
+          onClose={clearResults}
+        >
+          <div className="p-3 bg-background rounded-md font-mono text-sm overflow-y-auto max-h-64 border">
+            {results.map((result, index) => (
+              <div key={index} className="mb-1 text-xs">
+                {result}
+              </div>
+            ))}
           </div>
-          {showResultsDetails && (
-            <div className="p-3 bg-background rounded-md font-mono text-sm overflow-y-auto max-h-64 border">
-              {results.map((result, index) => (
-                <div key={index} className="mb-1 text-xs">
-                  {result}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        </ResultPanel>
       )}
     </div>
   )

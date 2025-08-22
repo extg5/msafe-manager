@@ -5,6 +5,8 @@ import { Hex } from "@aptos-labs/ts-sdk"
 import { Button } from "@/components/ui/button"
 import { WalletModal } from "./wallet-modal"
 import { SignatureDisplay } from "./signature-display"
+import { MessageHexInput, hexUtils } from "./message-hex-input"
+import { ErrorDisplay } from "./error-display"
 
 export function WalletMessageSigner() {
   const [messageHex, setMessageHex] = useState("b5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb010000000000000002000000000000000000000000000000000000000000000000000000000000000104636f696e087472616e73666572010700000000000000000000000000000000000000000000000000000000000000010a6170746f735f636f696e094170746f73436f696e000220a5a18e45d7086798c4e81cbb9d61cdbd131c74a9f8151ed11f1732c73fc9c718080065cd1d00000000e80300000000000078000000000000006a39ac680000000001")
@@ -14,30 +16,6 @@ export function WalletMessageSigner() {
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false)
 
   const { signMessage, connected, account } = useWallet()
-
-  const getMessageStatus = () => {
-    if (!messageHex.trim()) return ""
-    
-    let cleanHex = messageHex.trim()
-    if (cleanHex.startsWith('0x')) {
-      cleanHex = cleanHex.slice(2)
-    }
-    
-    // Check if it's valid hex
-    if (!/^[0-9a-fA-F]*$/.test(cleanHex)) {
-      return "⚠ Invalid hex format"
-    }
-    
-    if (cleanHex.length === 0) {
-      return "⚠ Empty message"
-    }
-    
-    if (cleanHex.length % 2 !== 0) {
-      return "⚠ Odd hex string length"
-    }
-    
-    return `✓ Hex message: ${Math.floor(cleanHex.length / 2)} bytes`
-  }
 
   const signMessageWithWallet = async () => {
     if (!signMessage || !connected || !account) {
@@ -55,18 +33,9 @@ export function WalletMessageSigner() {
     setSignature("")
 
     try {
-      let cleanHex = messageHex.trim()
-      if (cleanHex.startsWith('0x')) {
-        cleanHex = cleanHex.slice(2)
-      }
-
-      // Check hex validity
-      if (!/^[0-9a-fA-F]*$/.test(cleanHex)) {
-        throw new Error("Invalid hex format")
-      }
-
-      if (cleanHex.length % 2 !== 0) {
-        throw new Error("Hex string must have even length")
+      const validation = hexUtils.validateHex(messageHex)
+      if (!validation.isValid) {
+        throw new Error(validation.error || "Invalid hex format")
       }
 
       // Convert hex to bytes and then to string for wallet signing
@@ -137,25 +106,10 @@ export function WalletMessageSigner() {
   return (
     <div className="space-y-4">
       {/* Message Input */}
-      <div className="space-y-3">
-        <div>
-          <label className="text-sm font-medium text-muted-foreground">
-            Message Hex (hex string with or without 0x prefix)
-          </label>
-          <textarea
-            value={messageHex}
-            onChange={(e) => setMessageHex(e.target.value)}
-            placeholder="Enter hex message to sign..."
-            className="mt-1 w-full p-3 bg-muted rounded-md font-mono text-sm resize-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-            rows={4}
-          />
-          {messageHex && (
-            <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-              {getMessageStatus()}
-            </div>
-          )}
-        </div>
-      </div>
+      <MessageHexInput 
+        value={messageHex}
+        onChange={setMessageHex}
+      />
 
       {/* Actions */}
       <div className="flex gap-2">
@@ -183,16 +137,10 @@ export function WalletMessageSigner() {
       </div>
 
       {/* Error Display */}
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950/20 p-3">
-          <div className="text-sm text-red-800 dark:text-red-200">
-            <strong>Error:</strong> {error}
-          </div>
-        </div>
-      )}
+      <ErrorDisplay error={error} onClear={() => setError("")} />
 
       {/* Results */}
-      <SignatureDisplay signature={signature} />
+      <SignatureDisplay signature={signature} onClose={clearResults} />
       
       <WalletModal 
         open={isWalletModalOpen} 

@@ -44,9 +44,9 @@ export function WalletInfo() {
                 <CardTitle className="text-lg">
                   Wallet Connected
                 </CardTitle>
-                <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100 shrink-0">
-                  {network && network?.name || 'Active' }
-                </Badge>
+                {network && network?.name ? <Badge variant="secondary" className="bg-green-100 text-green-800 dark:bg-green-900/80 dark:text-green-100 shrink-0 capitalize">
+                  {network.name}
+                </Badge> : null}
               </div>
               <CardDescription className="mt-1">
                 {account.address ? truncateAddress(account.address.toString()) : 'No address'}
