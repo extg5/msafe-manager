@@ -3,26 +3,25 @@ import { WalletConnector } from "@/components/wallet-connector"
 import { WalletInfo } from "@/components/wallet-info"
 import { CustomKeySigner } from "@/components/custom-key-signer"
 import { WalletMessageSigner } from "@/components/wallet-message-signer"
-import { ThemeToggle } from "@/components/theme-toggle"
+import { Header } from "@/components/header"
 import { CollapsibleSection } from "@/components/collapsible-section"
 import { 
   Wallet, 
   Lock,
   GitCompare,
+  Shield,
 } from "lucide-react"
 import { useState, useEffect, useCallback } from "react"
-import { useEffectiveTheme } from "@/hooks/use-theme"
-import aptosLogoDark from "@/assets/aptos-logomark-dark.svg"
-import aptosLogoLight from "@/assets/aptos-logomark-light.svg"
 import { SignatureComparison } from "@/components/signature-comparison"
+import { MSafeRegistryChecker } from "@/components/msafe-registry-checker"
 import { Badge } from "@/components/ui/badge"
 
 function App() {
   const { account, connected } = useWallet()
-  const effectiveTheme = useEffectiveTheme()
   const [showWalletSigner, setShowWalletSigner] = useState(true) // always open by default
   const [showCustomSigner, setShowCustomSigner] = useState(false) // collapsed by default
   const [showSignatureComparison, setShowSignatureComparison] = useState(false) // collapsed by default
+  const [showMSafeSection, setShowMSafeSection] = useState(false) // collapsed by default
   
   const [selectedSignature, setSelectedSignature] = useState<"wallet" | "custom" | null>(null)
   // Signature states for comparison
@@ -74,28 +73,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/20">
-      {/* Header */}
-      <header className="border-b border-border bg-background/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="">
-              <img 
-                src={effectiveTheme === 'dark' ? aptosLogoDark : aptosLogoLight} 
-                alt="Aptos Logo" 
-                className="h-8 w-8"
-              />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold">Aptos Signer</h1>
-              <p className="text-sm text-muted-foreground">Secure message signing tool</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <ThemeToggle />
-            <WalletConnector />
-          </div>
-        </div>
-      </header>
+      <Header />
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8 space-y-6">
@@ -103,6 +81,20 @@ function App() {
           {/* Wallet Info Section */}
           {connected && account?.address && (
             <WalletInfo />
+          )}
+
+          {/* MSafe Registry Section */}
+          {connected && account?.address && (
+            <CollapsibleSection
+              title="MSafe Multisig Wallets"
+              description="Check registration status and view your multisig wallets"
+              icon={Shield}
+              iconColor="bg-purple-500"
+              isExpanded={showMSafeSection}
+              onToggle={() => setShowMSafeSection(!showMSafeSection)}
+            >
+              <MSafeRegistryChecker />
+            </CollapsibleSection>
           )}
 
           {/* Wallet Message Signer */}
