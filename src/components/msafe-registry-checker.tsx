@@ -11,7 +11,6 @@ import { Shield, UserCheck, UserPlus } from "lucide-react"
 // MSafe deployer address for Mainnet from the official documentation
 // https://doc.m-safe.io/aptos/developers/system/msafe-contracts#deployed-smart-contract
 const MSAFE_MODULES_ACCOUNT = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
-const REGISTRY_MODULE = "registry"
 
 interface RegistryData {
   publicKey: string
@@ -43,33 +42,115 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
     setError(null)
 
     try {
-      // Try to get registry resource for the account
-      // В реальной реализации здесь будет правильный вызов API
-      // Пример:
+      // Get registry resource for the account
       const resource = await aptos.getAccountResource({
         accountAddress: account.address,
         resourceType: `${MSAFE_MODULES_ACCOUNT}::registry::OwnerMomentumSafes`
       })
 
-      console.log('res', resource)
+      // console.log('registry resource', resource)
 
       if (resource) {
-        const registryData: RegistryData = {
-          publicKey: resource.public_key as string,
-          pendings: (resource.pendings as string[]) || [],
-          msafes: (resource.msafes as string[]) || []
+        // Extract data from the resource
+        const ownedMSafes = resource as {
+          public_key: string
+          pendings: {
+            data: {
+              length: string
+              inner: {
+                handle: string
+              }
+            }
+          }
+          msafes: {
+            data: {
+              length: string
+              inner: {
+                handle: string
+              }
+            }
+          }
         }
         
+        // Get public key
+        const publicKey = ownedMSafes.public_key
+        
+        // Extract MSAFE addresses from tables
+        const msafes: string[] = []
+        const pendings: string[] = []
+        
+        // Process active MSAFEs
+        if (ownedMSafes.msafes && ownedMSafes.msafes.data) {
+          const msafesLength = Number(ownedMSafes.msafes.data.length)
+          console.log('Active MSAFEs length:', msafesLength)
+          
+          for (let i = 0; i < msafesLength; i++) {
+                                      try {
+               const msafeItem = await aptos.getTableItem({
+                 handle: ownedMSafes.msafes.data.inner.handle,
+                 data: {
+                   key_type: 'u64',
+                   value_type: `${MSAFE_MODULES_ACCOUNT}::table_map::Element<address, bool>`,
+                   key: i.toString()
+                 }
+               })
+               if (msafeItem && (msafeItem as { key: string }).key) {
+                 msafes.push((msafeItem as { key: string }).key)
+               }
+            } catch (e) {
+              console.warn(`Failed to get MSAFE at index ${i}:`, e)
+            }
+          }
+        }
+        
+        // Process pending MSAFEs
+        if (ownedMSafes.pendings && ownedMSafes.pendings.data) {
+          const pendingsLength = Number(ownedMSafes.pendings.data.length)
+          console.log('Pending MSAFEs length:', pendingsLength)
+          
+          for (let i = 0; i < pendingsLength; i++) {
+                         try {
+               const pendingItem = await aptos.getTableItem({
+                 handle: ownedMSafes.pendings.data.inner.handle,
+                 data: {
+                   key_type: 'u64',
+                   value_type: `${MSAFE_MODULES_ACCOUNT}::table_map::Element<address, bool>`,
+                   key: i.toString()
+                 }
+               })
+               if (pendingItem && (pendingItem as { key: string }).key) {
+                 pendings.push((pendingItem as { key: string }).key)
+               }
+            } catch (e) {
+              console.warn(`Failed to get pending MSAFE at index ${i}:`, e)
+            }
+          }
+        }
+
+        const registryData: RegistryData = {
+          publicKey: publicKey,
+          pendings: pendings,
+          msafes: msafes
+        }
+        
+        console.log('Processed registry data:', registryData)
+        console.log('Active MSAFEs found:', msafes.length)
+        console.log('Pending MSAFEs found:', pendings.length)
         setRegistryData(registryData)
         setIsRegistered(true)
         onRegistrationStatusChange?.(true)
       }
     } catch (err) {
       const error = err as Error
-      if (error.message?.includes("Resource not found") || (err as { status?: number }).status === 404) {
+      const status = (err as { status?: number }).status
+      
+      if (error.message?.includes("Resource not found") || status === 404) {
         setIsRegistered(false)
         setRegistryData(null)
         onRegistrationStatusChange?.(false)
+      } else if (status === 429) {
+        setError("Too many requests to API. Please wait a moment and try again.")
+        console.error("Rate limit exceeded:", error)
       } else {
         setError(`Failed to check registration: ${error.message}`)
         console.error("Registration check error:", error)
@@ -78,6 +159,8 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       setIsChecking(false)
     }
   }, [account, aptos, onRegistrationStatusChange])
+
+  console.log('registryData', registryData)
 
   // Register in MSafe registry
   const registerInMSafe = async () => {
@@ -94,7 +177,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       const response = await signAndSubmitTransaction({
         sender: account.address,
         data: {
-          function: `${MSAFE_MODULES_ACCOUNT}::${REGISTRY_MODULE}::register`,
+          function: `${MSAFE_MODULES_ACCOUNT}::registry::register`,
           functionArguments: [
             // Convert public key to bytes array for BCS serialization
             Array.from(new Ed25519PublicKey(account.publicKey.toString()).toUint8Array())
@@ -200,6 +283,50 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
                   </Badge>
                 )}
               </div>
+              
+              {/* Active MSafe Wallets List */}
+              {registryData.msafes.length > 0 && (
+                <div className="space-y-2">
+                  <span className="text-xs font-medium text-green-600">Active MSafe Wallets:</span>
+                  <div className="space-y-1">
+                    {registryData.msafes.map((msafeAddress, index) => (
+                      <div key={index} className="flex items-center justify-between p-2 bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-800 rounded text-xs">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                          <span className="font-mono text-muted-foreground overflow-hidden  truncate">
+                            {msafeAddress}
+                          </span>
+                        </div>
+                        <Badge variant="secondary" className="text-xs">
+                          Active
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Pending MSafe Wallets List */}
+              {registryData.pendings.length > 0 && (
+                <div className="space-y-2">
+                  <span className="text-xs font-medium text-yellow-600">Pending MSafe Wallets:</span>
+                  <div className="space-y-1">
+                    {registryData.pendings.map((msafeAddress, index) => (
+                      <div key={index} className="flex items-center justify-between p-2 bg-yellow-50 dark:bg-yellow-950/20 border border-yellow-200 dark:border-yellow-800 rounded text-xs">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
+                          <span className="font-mono text-muted-foreground overflow-hidden  truncate">
+                            {msafeAddress}
+                          </span>
+                        </div>
+                        <Badge variant="outline" className="text-xs">
+                          Pending
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
