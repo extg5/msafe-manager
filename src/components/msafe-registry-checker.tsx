@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react"
 import { useWallet } from "@aptos-labs/wallet-adapter-react"
-import { Aptos, AptosConfig, Network, Ed25519PublicKey } from "@aptos-labs/ts-sdk"
+import { Aptos, AptosConfig, Network, Ed25519PublicKey, MultiEd25519PublicKey, AuthenticationKey, Hex } from "@aptos-labs/ts-sdk"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -23,11 +23,12 @@ interface MSafeRegistryCheckerProps {
 }
 
 export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegistryCheckerProps) {
-  const { account, connected, signAndSubmitTransaction } = useWallet()
+  const { account, connected, signAndSubmitTransaction, signTransaction } = useWallet()
   const [isRegistered, setIsRegistered] = useState<boolean | null>(null)
   const [registryData, setRegistryData] = useState<RegistryData | null>(null)
   const [isChecking, setIsChecking] = useState(false)
   const [isRegistering, setIsRegistering] = useState(false)
+  const [isCreatingMSafe, setIsCreatingMSafe] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // Initialize Aptos client для Mainnet
@@ -162,6 +163,160 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
 
   console.log('registryData', registryData)
 
+  // MSafe deployer address for Mainnet
+  const MSAFE_DEPLOYER = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
+  const IMPORT_NONCE = BigInt('0xffffffffffffffff')
+
+  // Parse public key from various formats
+  const parsePubKey = (publicKey: string | Uint8Array | Hex): Ed25519PublicKey => {
+    let pkBytes: Uint8Array
+    if (typeof publicKey === 'string') {
+      pkBytes = Hex.fromHexString(publicKey).toUint8Array()
+    } else if (publicKey instanceof Hex) {
+      pkBytes = publicKey.toUint8Array()
+    } else {
+      pkBytes = publicKey
+    }
+    return new Ed25519PublicKey(pkBytes)
+  }
+
+  // Create nonce public key
+  const noncePubKey = (nonce: number): Ed25519PublicKey => {
+    const pubKey = new Uint8Array(Ed25519PublicKey.LENGTH)
+    const deployerBuf = Hex.fromHexString(MSAFE_DEPLOYER).toUint8Array()
+    pubKey.set(deployerBuf.slice(0, 16), 0)
+    
+    // Write nonce as little-endian 32-bit integer
+    const nonceBytes = new Uint8Array(4)
+    const view = new DataView(nonceBytes.buffer)
+    view.setUint32(0, nonce, true) // true for little-endian
+    pubKey.set(nonceBytes, 16)
+    
+    return new Ed25519PublicKey(pubKey)
+  }
+
+  // Calculate MSafe address based on owners, threshold, and nonce
+  const computeMultiSigAddress = (owners: string[] | Uint8Array[] | Hex[], threshold: number, nonce: bigint) => {
+    const publicKeys: Ed25519PublicKey[] = owners.map((owner) => {
+      return parsePubKey(owner)
+    })
+    
+    if (nonce !== IMPORT_NONCE) {
+      publicKeys.push(noncePubKey(Number(nonce)))
+    }
+    
+    const multiPubKey = new MultiEd25519PublicKey({publicKeys, threshold})
+    const authKey = AuthenticationKey.fromPublicKey({ publicKey: multiPubKey })
+    
+    return authKey.derivedAddress()
+  }
+
+  // Create new MSafe wallet
+  const createNewMSafe = async () => {
+    if (!account?.address || !account?.publicKey) {
+      setError("Account information not available")
+      return
+    }
+
+    setIsCreatingMSafe(true)
+    setError(null)
+
+    try {
+      // Create a simple multi-owner MSafe
+      const owners = [
+        account.address, '0x5a047d093b7e65201a3a9b666f11caa74b8b631b63976610bc671a1a33a27bab', '0x1642653ef5cc888184722e47704205d76b56ffdc97782856f3376dc717d7e4f5',
+      ]
+      const threshold = 2
+      // const initBalance = 20000000n // Start with 0.2 balance
+
+      // Get public keys from registry for all owners
+      const ownerPubKeys = []
+      for (const owner of owners) {
+        try {
+          console.log('owner', owner)
+          const registryData = await aptos.getAccountResource({
+            accountAddress: owner,
+            resourceType: `${MSAFE_MODULES_ACCOUNT}::registry::OwnerMomentumSafes`
+          })
+          if (registryData) {
+            ownerPubKeys.push(registryData.public_key || registryData.publicKey)
+          }
+        } catch {
+          setError(`Owner ${owner} is not registered in MSafe registry`)
+          return
+        }
+      }
+
+      console.log('ownerPubKeys', ownerPubKeys);
+
+      // TODO: fetch nonce from msafe table
+      const creationNonce = 0n // Use timestamp as nonce for demo
+      const msafeAddress = computeMultiSigAddress(ownerPubKeys, threshold, creationNonce)
+      
+      console.log('Calculated MSafe address:', msafeAddress.toString())
+      console.log('Calculated MSafe address:', msafeAddress.toString() === '0x0df5d0cc432314d929d67831192ce9af1a0279a6fd5a6f88b449fd55a0fd9ea7')
+      console.log('Owners:', owners)
+      console.log('Threshold:', threshold)
+      console.log('Creation nonce:', creationNonce.toString())
+
+      const metadata = "Momentum Safe"
+      console.log('metadata', new TextEncoder().encode(metadata))
+      // First, create and sign the MSafe register transaction      
+      const registerResponse = await signTransaction({
+        transactionOrPayload: {
+          sender: msafeAddress.toString(),
+          data: {
+            function: `${MSAFE_MODULES_ACCOUNT}::momentum_safe::register`,
+            functionArguments: [
+              // BCS serialize the metadata string - convert to bytes array
+              new TextEncoder().encode(metadata)
+            ]
+          }
+        }
+      })
+
+      console.log('registerResponse', registerResponse)
+      console.log('registerResponse', new Hex(registerResponse.rawTransaction).toString())
+      
+      // // Now create the MSafe creation transaction with the signed payload
+      // const response = await signAndSubmitTransaction({
+      //   sender: account.address,
+      //   data: {
+      //     function: `${MSAFE_MODULES_ACCOUNT}::creator::init_wallet_creation`,
+      //     functionArguments: [
+      //       // Serialize owners array (vector of addresses)
+      //       owners,
+      //       // Threshold as u8
+      //       threshold,
+      //       // Initial balance as u64
+      //       initBalance.toString(),
+      //       // Payload (signed register transaction)
+      //       registerResponse.payload,
+      //       // Signature
+      //       registerResponse.signature
+      //     ]
+      //   }
+      // })
+      
+      // // Wait for transaction confirmation
+      // await aptos.waitForTransaction({
+      //   transactionHash: response.hash
+      // })
+
+      // Recheck registration status to see the new MSafe
+      // await checkRegistration()
+      
+      setError(`MSafe creation initiated successfully! Calculated address: ${msafeAddress}`)
+      
+    } catch (err) {
+      const error = err as Error
+      setError(`MSafe creation failed: ${error.message}`)
+      console.error("MSafe creation error:", error)
+    } finally {
+      setIsCreatingMSafe(false)
+    }
+  }
+
   // Register in MSafe registry
   const registerInMSafe = async () => {
     if (!account?.address || !account?.publicKey) {
@@ -259,9 +414,19 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
         {/* Registration Details */}
         {isRegistered && registryData && (
           <div className="space-y-3 p-3 bg-muted/50 rounded-lg">
-            <div className="flex items-center gap-2">
-              <UserCheck className="h-4 w-4 text-green-600" />
-              <span className="text-sm font-medium text-green-600">Registered in MSafe</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <UserCheck className="h-4 w-4 text-green-600" />
+                <span className="text-sm font-medium text-green-600">Registered in MSafe</span>
+              </div>
+              <LoadingButton
+                onClick={createNewMSafe}
+                loading={isCreatingMSafe}
+                size="sm"
+                variant="outline"
+              >
+                {isCreatingMSafe ? "Creating..." : "Create New MSafe"}
+              </LoadingButton>
             </div>
             
             <div className="grid gap-2 text-xs">
