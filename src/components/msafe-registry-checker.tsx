@@ -12,6 +12,26 @@ import { Shield, UserCheck, UserPlus } from "lucide-react"
 // https://doc.m-safe.io/aptos/developers/system/msafe-contracts#deployed-smart-contract
 const MSAFE_MODULES_ACCOUNT = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
 
+interface TransactionPayload {
+  function: string
+  type_arguments: string[]
+  arguments: string[]
+}
+
+interface TransactionOptions {
+  sender: string
+  sequence_number: number
+  max_gas_amount: number
+  gas_unit_price: number
+  expiration_timestamp_secs: number
+}
+
+interface PontemProvider {
+  connect: () => Promise<void>
+  switchNetwork?: (chainId: number) => Promise<void>
+  signTransaction: (payload: TransactionPayload, opts: TransactionOptions) => Promise<{ result?: Uint8Array } | Uint8Array>
+}
+
 interface RegistryData {
   publicKey: string
   pendings: string[]
@@ -23,6 +43,7 @@ interface MSafeRegistryCheckerProps {
 }
 
 export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegistryCheckerProps) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { account, connected, signAndSubmitTransaction, signTransaction } = useWallet()
   const [isRegistered, setIsRegistered] = useState<boolean | null>(null)
   const [registryData, setRegistryData] = useState<RegistryData | null>(null)
@@ -167,6 +188,49 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
   const MSAFE_DEPLOYER = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
   const IMPORT_NONCE = BigInt('0xffffffffffffffff')
 
+  // === TRANSACTION CONFIG ===
+  const META = "Momentum Safe"
+  const SEQ = 0
+  const MAX_GAS = 12000
+  const GAS_PX = 120
+  const EXP = 1756555990
+  const CHAINID = 1
+
+  // === HELPERS ===
+  const toHex = (u8: Uint8Array | number[]): string => {
+    const bytes = u8 instanceof Uint8Array ? u8 : new Uint8Array(u8)
+    return "0x" + Array.from(bytes).map(b => b.toString(16).padStart(2,"0")).join("")
+  }
+
+  // Extracts Ed25519 {variant=0x00, pubkey(32), signature(64)} from the end of BCS(SignedTransaction)
+  const extractSigFromSignedTx = (signedBytes: Uint8Array | number[]) => {
+    const bytes = signedBytes instanceof Uint8Array ? signedBytes : new Uint8Array(signedBytes)
+    if (bytes.length < 1 + 1 + 32 + 1 + 64) throw new Error("SignedTransaction too short")
+
+    // Tail layout (BCS):
+    // ... [authenticator]
+    //    variant(1B = 0x00 for ed25519)
+    //    pubkey:  ULEB len (should be 0x20) + 32 bytes
+    //    signature: ULEB len (should be 0x40) + 64 bytes
+
+    const sigLen = bytes[bytes.length - 65] // byte right before the 64 sig bytes
+    if (sigLen !== 0x40) throw new Error(`Unexpected signature length tag: 0x${sigLen.toString(16)}`)
+    const signature = bytes.slice(bytes.length - 64)
+
+    const pkLenIdx = bytes.length - 65 - 33 // 1 (pk len) + 32 (pk) + 1 (sig len) + 64 (sig)
+    const pkLen = bytes[pkLenIdx]
+    if (pkLen !== 0x20) throw new Error(`Unexpected pubkey length tag: 0x${pkLen.toString(16)}`)
+    const pubkey = bytes.slice(pkLenIdx + 1, pkLenIdx + 1 + 32)
+
+    const variant = bytes[pkLenIdx - 1]
+    if (variant !== 0x00) {
+      // 0x01 would be multiEd25519 etc. You can extend this if you ever get other variants.
+      throw new Error(`Unsupported authenticator variant: 0x${variant.toString(16)}`)
+    }
+
+    return { variant, pubkey, signature }
+  }
+
   // Parse public key from various formats
   const parsePubKey = (publicKey: string | Uint8Array | Hex): Ed25519PublicKey => {
     let pkBytes: Uint8Array
@@ -259,24 +323,43 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       console.log('Threshold:', threshold)
       console.log('Creation nonce:', creationNonce.toString())
 
-      const metadata = "Momentum Safe"
-      console.log('metadata', new TextEncoder().encode(metadata))
-      // First, create and sign the MSafe register transaction      
-      const registerResponse = await signTransaction({
-        transactionOrPayload: {
-          sender: msafeAddress.toString(),
-          data: {
-            function: `${MSAFE_MODULES_ACCOUNT}::momentum_safe::register`,
-            functionArguments: [
-              // BCS serialize the metadata string - convert to bytes array
-              new TextEncoder().encode(metadata)
-            ]
-          }
-        }
-      })
+        // Use Pontem provider for transaction signing with proper configuration
+        const provider = (window as { pontem?: PontemProvider }).pontem
+        if (!provider) throw new Error("Pontem provider not found on window")
+        
+        try { 
+          await provider.switchNetwork?.(CHAINID) 
+        } catch {
+          console.log("Network switch not needed or failed")
+      }
 
-      console.log('registerResponse', registerResponse)
-      console.log('registerResponse', new Hex(registerResponse.rawTransaction).toString())
+      const payload = {
+        function: `${MSAFE_MODULES_ACCOUNT}::momentum_safe::register`,
+        type_arguments: [],
+        arguments: [META], // or: [new TextEncoder().encode(META)]
+      }
+
+      const opts = {
+        sender: msafeAddress.toString(),
+        sequence_number: SEQ,
+        max_gas_amount: MAX_GAS,
+        gas_unit_price: GAS_PX,
+        expiration_timestamp_secs: EXP,
+      }
+
+      // Sign only (no submit)
+      const ret = await provider.signTransaction(payload, opts)
+      const signedBytes = ret instanceof Uint8Array ? ret : ret.result
+      if (!signedBytes) throw new Error("Failed to get signed transaction bytes")
+
+      // --- extract & print JUST the signature (and pubkey) ---
+      const { variant, pubkey, signature } = extractSigFromSignedTx(signedBytes)
+      console.log("authenticator variant:", variant)         // 0 => Ed25519
+      console.log("pubkey (hex):", toHex(pubkey))            // 32 bytes
+      console.log("signature (hex):", toHex(signature))      // 64 bytes
+
+      // blob for debugging:
+      console.log("SignedTransaction (hex):", toHex(signedBytes))
       
       // // Now create the MSafe creation transaction with the signed payload
       // const response = await signAndSubmitTransaction({
@@ -306,7 +389,11 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       // Recheck registration status to see the new MSafe
       // await checkRegistration()
       
-      setError(`MSafe creation initiated successfully! Calculated address: ${msafeAddress}`)
+      setError(`MSafe transaction signed successfully!
+      Calculated address: ${msafeAddress}
+      Signature: ${toHex(signature)}
+      Public key: ${toHex(pubkey)}
+      Authenticator variant: ${variant}`)
       
     } catch (err) {
       const error = err as Error
