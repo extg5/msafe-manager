@@ -43,8 +43,7 @@ interface MSafeRegistryCheckerProps {
 }
 
 export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegistryCheckerProps) {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { account, connected, signAndSubmitTransaction, signTransaction } = useWallet()
+  const { account, connected, signAndSubmitTransaction, wallet } = useWallet()
   const [isRegistered, setIsRegistered] = useState<boolean | null>(null)
   const [registryData, setRegistryData] = useState<RegistryData | null>(null)
   const [isChecking, setIsChecking] = useState(false)
@@ -323,14 +322,20 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       console.log('Threshold:', threshold)
       console.log('Creation nonce:', creationNonce.toString())
 
-        // Use Pontem provider for transaction signing with proper configuration
-        const provider = (window as { pontem?: PontemProvider }).pontem
-        if (!provider) throw new Error("Pontem provider not found on window")
-        
-        try { 
-          await provider.switchNetwork?.(CHAINID) 
-        } catch {
-          console.log("Network switch not needed or failed")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (!(wallet as any)?.isPontem) {
+        setError("Only Pontem wallet is supported for MSafe creation")
+        return
+      }
+
+      // Use Pontem provider for transaction signing with proper configuration
+      const provider = (window as { pontem?: PontemProvider }).pontem
+      if (!provider) throw new Error("Pontem provider not found on window")
+      
+      try { 
+        await provider.switchNetwork?.(CHAINID) 
+      } catch {
+        console.log("Network switch not needed or failed")
       }
 
       const payload = {

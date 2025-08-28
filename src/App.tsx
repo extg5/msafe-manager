@@ -5,6 +5,7 @@ import { CustomKeySigner } from "@/components/custom-key-signer"
 import { WalletMessageSigner } from "@/components/wallet-message-signer"
 import { Header } from "@/components/header"
 import { CollapsibleSection } from "@/components/collapsible-section"
+import { NetworkSwitcher } from "@/components/network-switcher"
 import { 
   Wallet, 
   Lock,
@@ -74,6 +75,9 @@ function App() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/20">
       <Header />
+      
+      {/* Network Switcher - monitors network and shows modal when needed */}
+      <NetworkSwitcher />
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8 space-y-6">

@@ -15,7 +15,7 @@ interface WalletModalProps {
 }
 
 export function WalletModal({ open, onOpenChange }: WalletModalProps) {
-  const { connect, wallets } = useWallet()
+    const { connect, wallets } = useWallet()
 
   const handleConnect = async (walletName: string) => {
     try {
