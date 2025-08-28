@@ -6,7 +6,9 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { LoadingButton } from "@/components/ui/loading-button"
 import { Textarea } from "@/components/ui/textarea"
-import { Shield, UserCheck, UserPlus, CheckCircle, XCircle } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Shield, UserCheck, UserPlus, CheckCircle, XCircle, Plus, X } from "lucide-react"
 
 // MSafe deployer address for Mainnet from the official documentation
 // https://doc.m-safe.io/aptos/developers/system/msafe-contracts#deployed-smart-contract
@@ -30,6 +32,7 @@ interface PontemProvider {
   connect: () => Promise<void>
   switchNetwork?: (chainId: number) => Promise<void>
   signTransaction: (payload: TransactionPayload, opts: TransactionOptions) => Promise<{ result?: Uint8Array } | Uint8Array>
+  signAndSubmit: (payload: TransactionPayload, opts: TransactionOptions) => Promise<{ result?: Uint8Array } | Uint8Array>
 }
 
 interface RegistryData {
@@ -55,6 +58,11 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
   const [isRegistering, setIsRegistering] = useState(false)
   const [isCreatingMSafe, setIsCreatingMSafe] = useState(false)
   const [result, setResult] = useState<Result | null>(null)
+  
+  // MSafe creation form states
+  const [owners, setOwners] = useState<string[]>([])
+  const [threshold, setThreshold] = useState<number>(1)
+  const [initBalance, setInitBalance] = useState<string>("0.1")
 
   // Initialize Aptos client для Mainnet
   const aptosConfig = useMemo(() => new AptosConfig({ network: Network.MAINNET }), [])
@@ -263,7 +271,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
   }
 
   // Calculate MSafe address based on owners, threshold, and nonce
-  const computeMultiSigAddress = (owners: string[] | Uint8Array[] | Hex[], threshold: number, nonce: bigint) => {
+  const computeMultiSigAddress = useCallback((owners: string[] | Uint8Array[] | Hex[], threshold: number, nonce: bigint) => {
     const publicKeys: Ed25519PublicKey[] = owners.map((owner) => {
       return parsePubKey(owner)
     })
@@ -276,7 +284,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
     const authKey = AuthenticationKey.fromPublicKey({ publicKey: multiPubKey })
     
     return authKey.derivedAddress()
-  }
+  }, [IMPORT_NONCE])
 
   // Create new MSafe wallet
   const createNewMSafe = async () => {
@@ -285,17 +293,21 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       return
     }
 
+    if (owners.length === 0 || threshold <= 1 || threshold > owners.length) {
+      setResult({ type: 'error', message: "Invalid owners or threshold configuration" })
+      return
+    }
+
+    // Validate all owner addresses are filled
+    if (owners.some(owner => !owner.trim())) {
+      setResult({ type: 'error', message: "All owner addresses must be filled" })
+      return
+    }
+
     setIsCreatingMSafe(true)
     setResult(null)
 
     try {
-      // Create a simple multi-owner MSafe
-      const owners = [
-        account.address, '0x5a047d093b7e65201a3a9b666f11caa74b8b631b63976610bc671a1a33a27bab', '0x1642653ef5cc888184722e47704205d76b56ffdc97782856f3376dc717d7e4f5',
-      ]
-      const threshold = 2
-      // const initBalance = 20000000n // Start with 0.2 balance
-
       // Get public keys from registry for all owners
       const ownerPubKeys = []
       for (const owner of owners) {
@@ -369,6 +381,22 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
 
       // blob for debugging:
       console.log("SignedTransaction (hex):", toHex(signedBytes))
+
+      console.log('provider', provider);
+
+      // const submitPayload = {
+      //   function: `${MSAFE_MODULES_ACCOUNT}::creator::init_wallet_creation`,
+      //   type_arguments: [],
+      //   arguments: [
+      //     owners,
+      //     threshold,
+      //     initBalance.toString(),
+      //     signedBytes,
+      //     signature
+      //   ]
+      // }
+
+      // await provider.signAndSubmit(submitPayload as TransactionPayload, opts)
       
       // // Now create the MSafe creation transaction with the signed payload
       // const response = await signAndSubmitTransaction({
@@ -455,6 +483,54 @@ Authenticator variant: ${variant}`
     } finally {
       setIsRegistering(false)
     }
+  }
+
+  // Initialize owners with current account address
+  useEffect(() => {
+    if (account?.address && owners.length === 0) {
+      setOwners([account.address.toString()])
+    }
+  }, [account?.address, owners.length])
+
+  // Calculate MSafe address based on current owners and threshold
+  const calculatedMSafeAddress = useMemo(() => {
+    if (owners.length === 0 || threshold < 1 || threshold > owners.length) {
+      return null
+    }
+
+    try {
+      // For demonstration, we'll use the current account's public key for all owners
+      // In real implementation, you'd need to fetch public keys for each owner from registry
+      const ownerPubKeys = owners.map(() => account?.publicKey?.toString() || "")
+      if (ownerPubKeys.some(key => !key)) return null
+
+      const creationNonce = 0n // Use 0 as default nonce
+      return computeMultiSigAddress(ownerPubKeys, threshold, creationNonce)
+    } catch (error) {
+      console.error("Failed to calculate MSafe address:", error)
+      return null
+    }
+  }, [owners, threshold, account?.publicKey, computeMultiSigAddress])
+
+  // Functions for managing owners array
+  const addOwner = () => {
+    setOwners([...owners, ""])
+  }
+
+  const removeOwner = (index: number) => {
+    if (index === 0) return // Cannot remove first owner (current account)
+    setOwners(owners.filter((_, i) => i !== index))
+    // Adjust threshold if it's higher than remaining owners count
+    if (threshold > owners.length - 1) {
+      setThreshold(owners.length - 1)
+    }
+  }
+
+  const updateOwner = (index: number, address: string) => {
+    if (index === 0) return // Cannot update first owner (current account)
+    const newOwners = [...owners]
+    newOwners[index] = address
+    setOwners(newOwners)
   }
 
   // Check registration when wallet connects
@@ -549,13 +625,105 @@ Authenticator variant: ${variant}`
                 <UserCheck className="h-4 w-4 text-green-600" />
                 <span className="text-sm font-medium text-green-600">Registered in MSafe</span>
               </div>
+            </div>
+
+            {/* MSafe Creation Form */}
+            <div className="space-y-4 p-4 bg-background border rounded-lg">
+              <h4 className="text-sm font-medium">Create New MSafe Wallet</h4>
+              
+              {/* Owners Configuration */}
+              <div className="space-y-3">
+                <Label className="text-sm font-medium">Owners</Label>
+                {owners.map((owner, index) => (
+                  <div key={index} className="flex items-center gap-2">
+                    <Input
+                      value={owner}
+                      onChange={(e) => updateOwner(index, e.target.value)}
+                      placeholder={index === 0 ? "Your address (cannot be changed)" : "Owner address"}
+                      disabled={index === 0}
+                      className={`text-xs font-mono ${index === 0 ? 'bg-muted' : ''}`}
+                    />
+                    {index > 0 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeOwner(index)}
+                        className="p-1 h-8 w-8"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
+                ))}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={addOwner}
+                  className="w-full"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Owner
+                </Button>
+              </div>
+
+              {/* Threshold Configuration */}
+              <div className="space-y-2">
+                <Label htmlFor="threshold" className="text-sm font-medium">
+                  Threshold ({threshold}/{owners.length})
+                </Label>
+                <Input
+                  id="threshold"
+                  type="number"
+                  min="1"
+                  max={owners.length}
+                  value={threshold}
+                  onChange={(e) => setThreshold(Math.min(Math.max(1, parseInt(e.target.value) || 1), owners.length))}
+                  className="text-sm"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Number of signatures required to execute transactions
+                </p>
+              </div>
+
+              {/* Initial Balance Configuration */}
+              <div className="space-y-2">
+                <Label htmlFor="initBalance" className="text-sm font-medium">
+                  Initial Balance (APT)
+                </Label>
+                <Input
+                  id="initBalance"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={initBalance}
+                  onChange={(e) => setInitBalance(e.target.value)}
+                  className="text-sm"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Initial balance to fund the MSafe wallet
+                </p>
+              </div>
+
+              {/* Calculated MSafe Address */}
+              {calculatedMSafeAddress && (
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">Calculated MSafe Address</Label>
+                  <div className="p-2 bg-muted rounded text-xs font-mono break-all">
+                    {calculatedMSafeAddress.toString()}
+                  </div>
+                </div>
+              )}
+
+              {/* Create Button */}
               <LoadingButton
                 onClick={createNewMSafe}
                 loading={isCreatingMSafe}
-                size="sm"
-                variant="outline"
+                className="w-full"
+                disabled={!calculatedMSafeAddress || owners.some(owner => !owner.trim())}
               >
-                {isCreatingMSafe ? "Creating..." : "Create New MSafe"}
+                {isCreatingMSafe ? "Creating..." : "Create MSafe Wallet"}
               </LoadingButton>
             </div>
             
