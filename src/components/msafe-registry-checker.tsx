@@ -5,8 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { LoadingButton } from "@/components/ui/loading-button"
-import { ErrorDisplay } from "@/components/error-display"
-import { Shield, UserCheck, UserPlus } from "lucide-react"
+import { Textarea } from "@/components/ui/textarea"
+import { Shield, UserCheck, UserPlus, CheckCircle, XCircle } from "lucide-react"
 
 // MSafe deployer address for Mainnet from the official documentation
 // https://doc.m-safe.io/aptos/developers/system/msafe-contracts#deployed-smart-contract
@@ -42,6 +42,11 @@ interface MSafeRegistryCheckerProps {
   onRegistrationStatusChange?: (isRegistered: boolean) => void
 }
 
+interface Result {
+  type: 'success' | 'error'
+  message: string
+}
+
 export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegistryCheckerProps) {
   const { account, connected, signAndSubmitTransaction, wallet } = useWallet()
   const [isRegistered, setIsRegistered] = useState<boolean | null>(null)
@@ -49,7 +54,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
   const [isChecking, setIsChecking] = useState(false)
   const [isRegistering, setIsRegistering] = useState(false)
   const [isCreatingMSafe, setIsCreatingMSafe] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<Result | null>(null)
 
   // Initialize Aptos client для Mainnet
   const aptosConfig = useMemo(() => new AptosConfig({ network: Network.MAINNET }), [])
@@ -60,7 +65,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
     if (!account?.address) return
 
     setIsChecking(true)
-    setError(null)
+    setResult(null)
 
     try {
       // Get registry resource for the account
@@ -170,10 +175,10 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
         setRegistryData(null)
         onRegistrationStatusChange?.(false)
       } else if (status === 429) {
-        setError("Too many requests to API. Please wait a moment and try again.")
+        setResult({ type: 'error', message: "Too many requests to API. Please wait a moment and try again." })
         console.error("Rate limit exceeded:", error)
       } else {
-        setError(`Failed to check registration: ${error.message}`)
+        setResult({ type: 'error', message: `Failed to check registration: ${error.message}` })
         console.error("Registration check error:", error)
       }
     } finally {
@@ -184,7 +189,6 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
   console.log('registryData', registryData)
 
   // MSafe deployer address for Mainnet
-  const MSAFE_DEPLOYER = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
   const IMPORT_NONCE = BigInt('0xffffffffffffffff')
 
   // === TRANSACTION CONFIG ===
@@ -246,7 +250,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
   // Create nonce public key
   const noncePubKey = (nonce: number): Ed25519PublicKey => {
     const pubKey = new Uint8Array(Ed25519PublicKey.LENGTH)
-    const deployerBuf = Hex.fromHexString(MSAFE_DEPLOYER).toUint8Array()
+    const deployerBuf = Hex.fromHexString(MSAFE_MODULES_ACCOUNT).toUint8Array()
     pubKey.set(deployerBuf.slice(0, 16), 0)
     
     // Write nonce as little-endian 32-bit integer
@@ -277,12 +281,12 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
   // Create new MSafe wallet
   const createNewMSafe = async () => {
     if (!account?.address || !account?.publicKey) {
-      setError("Account information not available")
+      setResult({ type: 'error', message: "Account information not available" })
       return
     }
 
     setIsCreatingMSafe(true)
-    setError(null)
+    setResult(null)
 
     try {
       // Create a simple multi-owner MSafe
@@ -305,7 +309,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
             ownerPubKeys.push(registryData.public_key || registryData.publicKey)
           }
         } catch {
-          setError(`Owner ${owner} is not registered in MSafe registry`)
+          setResult({ type: 'error', message: `Owner ${owner} is not registered in MSafe registry` })
           return
         }
       }
@@ -324,7 +328,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       if (!(wallet as any)?.isPontem) {
-        setError("Only Pontem wallet is supported for MSafe creation")
+        setResult({ type: 'error', message: "Only Pontem wallet is supported for MSafe creation" })
         return
       }
 
@@ -394,15 +398,18 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       // Recheck registration status to see the new MSafe
       // await checkRegistration()
       
-      setError(`MSafe transaction signed successfully!
-      Calculated address: ${msafeAddress}
-      Signature: ${toHex(signature)}
-      Public key: ${toHex(pubkey)}
-      Authenticator variant: ${variant}`)
+      setResult({
+        type: 'success',
+        message: `MSafe transaction signed successfully!
+Calculated address: ${msafeAddress}
+Signature: ${toHex(signature)}
+Public key: ${toHex(pubkey)}
+Authenticator variant: ${variant}`
+      })
       
     } catch (err) {
       const error = err as Error
-      setError(`MSafe creation failed: ${error.message}`)
+      setResult({ type: 'error', message: `MSafe creation failed: ${error.message}` })
       console.error("MSafe creation error:", error)
     } finally {
       setIsCreatingMSafe(false)
@@ -412,12 +419,12 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
   // Register in MSafe registry
   const registerInMSafe = async () => {
     if (!account?.address || !account?.publicKey) {
-      setError("Account information not available")
+      setResult({ type: 'error', message: "Account information not available" })
       return
     }
 
     setIsRegistering(true)
-      setError(null)
+    setResult(null)
 
     try {
       // Submit transaction
@@ -439,10 +446,11 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
 
       // Recheck registration status
       await checkRegistration()
+      setResult({ type: 'success', message: 'Successfully registered in MSafe registry!' })
       
     } catch (err) {
       const error = err as Error
-      setError(`Registration failed: ${error.message}`)
+      setResult({ type: 'error', message: `Registration failed: ${error.message}` })
       console.error("Registration error:", error)
     } finally {
       setIsRegistering(false)
@@ -472,7 +480,37 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {error && <ErrorDisplay error={error} />}
+        {/* Result Display */}
+        {result && (
+          <div className={`p-3 rounded-lg border ${
+            result.type === 'success' 
+              ? 'bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800' 
+              : 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800'
+          }`}>
+            <div className="flex items-center gap-2 mb-2">
+              {result.type === 'success' ? (
+                <CheckCircle className="h-4 w-4 text-green-600" />
+              ) : (
+                <XCircle className="h-4 w-4 text-red-600" />
+              )}
+              <span className={`text-sm font-medium ${
+                result.type === 'success' ? 'text-green-600' : 'text-red-600'
+              }`}>
+                {result.type === 'success' ? 'Success' : 'Error'}
+              </span>
+            </div>
+            <Textarea
+              value={result.message}
+              readOnly
+              className={`text-xs font-mono resize-none ${
+                result.type === 'success' 
+                  ? 'bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800' 
+                  : 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800'
+              }`}
+              rows={result.message.split('\n').length}
+            />
+          </div>
+        )}
         
         {/* Registration Status */}
         <div className="flex items-center justify-between">
