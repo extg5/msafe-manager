@@ -85,6 +85,11 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
   const aptosConfig = useMemo(() => new AptosConfig({ network: Network.MAINNET }), [])
   const aptos = useMemo(() => new Aptos(aptosConfig), [aptosConfig])
 
+  useEffect(() => {
+    console.log('account', account)
+    console.log('wallet', wallet)
+  }, [account, wallet])
+
   // Check registration status
   const checkRegistration = useCallback(async () => {
     if (!account?.address) return
@@ -211,7 +216,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
     }
   }, [account, aptos, onRegistrationStatusChange])
 
-  console.log('registryData', registryData)
+  // console.log('registryData', registryData)
 
   // MSafe deployer address for Mainnet
   const IMPORT_NONCE = BigInt('0xffffffffffffffff')
@@ -367,12 +372,40 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       console.log('Threshold:', threshold)
       console.log('Creation nonce:', creationNonce.toString())
 
+
+      if (wallet && wallet.name === "Petra") {
+        console.log('Signing transaction with Petra...')
+        const tx = await aptos.transaction.build.simple({
+          sender:  msafeAddress.toString(),
+          data: {
+            function: `${MSAFE_MODULES_ACCOUNT}::momentum_safe::register`,
+            functionArguments: [META], // or: [new TextEncoder().encode(META)],
+            typeArguments: [],
+          },
+          options: {
+            gasUnitPrice: GAS_PX,
+            maxGasAmount: MAX_GAS,
+            // expireTimestamp: EXP,
+            // accountSequenceNumber: SEQ,
+            // replayProtectionNonce: undefined,
+          },
+        });
+      
+        const senderAuthenticator = await signTransaction({
+          transactionOrPayload: tx,
+        }); // <-- AccountAuthenticator
+
+        console.log('senderAuthenticator', senderAuthenticator)
+
+        return
+      }
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       if (!(wallet as any)?.isPontem) {
         setResult({ type: 'error', message: "Only Pontem wallet is supported for MSafe creation" })
         return
       }
-
+      
       // Use Pontem provider for transaction signing with proper configuration
       const provider = (window as { pontem?: PontemProvider }).pontem
       if (!provider) throw new Error("Pontem provider not found on window")
