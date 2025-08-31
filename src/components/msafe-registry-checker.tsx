@@ -430,6 +430,9 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
         expiration_timestamp_secs: EXP,
       }
 
+
+      const hexPayload = ''///
+
       // Sign only (no submit)
       const ret = await provider.signTransaction(payload, opts)
       console.log('ret', ret)
@@ -439,11 +442,15 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       // --- extract & print JUST the signature (and pubkey) ---
       const { variant, pubkey, signature } = extractSigFromSignedTx(signedBytes)
       console.log("authenticator variant:", variant)         // 0 => Ed25519
+      console.log("trx (hex):", toHex(signedBytes))            
       console.log("pubkey (hex):", toHex(pubkey))            // 32 bytes
       console.log("signature (hex):", toHex(signature))      // 64 bytes
 
+
+      const trxHex = '0xb5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193' + toHex(signedBytes).slice(0, -128).slice(2).slice(0,-70)
+
       // blob for debugging:
-      console.log("SignedTransaction (hex):", toHex(signedBytes))
+      console.log("trxHex:", trxHex)
 
       console.log('provider', provider);
 
@@ -454,14 +461,14 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
         arguments: [
           owners,
           threshold,
-          initBalance.toString(),
-          toHex(signedBytes), 
+          String(parseFloat(initBalance) * 10 ** 8),
+          trxHex, 
           toHex(signature)
         ]
       }
 
       const submitOpts = {
-        sender: account.address.toString(),
+        sender: msafeAddress.toString(),
         sequence_number: 0, // Will be filled by the provider
         max_gas_amount: MAX_GAS,
         gas_unit_price: GAS_PX,
