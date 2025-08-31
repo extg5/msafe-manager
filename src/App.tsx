@@ -19,10 +19,10 @@ import { Badge } from "@/components/ui/badge"
 
 function App() {
   const { account, connected } = useWallet()
-  const [showWalletSigner, setShowWalletSigner] = useState(true) // always open by default
+  const [showWalletSigner, setShowWalletSigner] = useState(false) // always open by default
   const [showCustomSigner, setShowCustomSigner] = useState(false) // collapsed by default
   const [showSignatureComparison, setShowSignatureComparison] = useState(false) // collapsed by default
-  const [showMSafeSection, setShowMSafeSection] = useState(false) // collapsed by default
+  const [showMSafeSection, setShowMSafeSection] = useState(true) // collapsed by default
   
   const [selectedSignature, setSelectedSignature] = useState<"wallet" | "custom" | null>(null)
   // Signature states for comparison

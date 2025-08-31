@@ -32,7 +32,7 @@ interface PontemProvider {
   connect: () => Promise<void>
   switchNetwork?: (chainId: number) => Promise<void>
   signTransaction: (payload: TransactionPayload, opts: TransactionOptions) => Promise<{ result?: Uint8Array } | Uint8Array>
-  signAndSubmit: (payload: TransactionPayload, opts: TransactionOptions) => Promise<{ result?: Uint8Array } | Uint8Array>
+  signAndSubmit: (payload: TransactionPayload, opts?: TransactionOptions) => Promise<{ result?: unknown, success?: boolean, payload?: unknown }>
 }
 
 interface RegistryData {
@@ -48,10 +48,17 @@ interface MSafeRegistryCheckerProps {
 interface Result {
   type: 'success' | 'error'
   message: string
+  data?: {
+    msafeAddress?: string
+    owners?: string[]
+    threshold?: number
+    initBalance?: number
+    transactionHash?: string
+  }
 }
 
 export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegistryCheckerProps) {
-  const { account, connected, signAndSubmitTransaction, wallet } = useWallet()
+  const { account, connected, signTransaction, signAndSubmitTransaction, wallet } = useWallet()
   const [isRegistered, setIsRegistered] = useState<boolean | null>(null)
   const [registryData, setRegistryData] = useState<RegistryData | null>(null)
   const [isChecking, setIsChecking] = useState(false)
@@ -293,6 +300,11 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       return
     }
 
+    if (!calculatedMSafeAddress) {
+      setResult({ type: 'error', message: "Cannot calculate MSafe address. Ensure all owners are registered." })
+      return
+    }
+
     if (owners.length === 0 || threshold <= 1 || threshold > owners.length) {
       setResult({ type: 'error', message: "Invalid owners or threshold configuration" })
       return
@@ -304,33 +316,19 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       return
     }
 
+    // Validate all owners are registered (have public keys)
+    if (ownerPubKeys.some(key => !key)) {
+      setResult({ type: 'error', message: "All owners must be registered in MSafe registry first" })
+      return
+    }
+  
     setIsCreatingMSafe(true)
     setResult(null)
 
     try {
-      // Get public keys from registry for all owners
-      const ownerPubKeys = []
-      for (const owner of owners) {
-        try {
-          console.log('owner', owner)
-          const registryData = await aptos.getAccountResource({
-            accountAddress: owner,
-            resourceType: `${MSAFE_MODULES_ACCOUNT}::registry::OwnerMomentumSafes`
-          })
-          if (registryData) {
-            ownerPubKeys.push(registryData.public_key || registryData.publicKey)
-          }
-        } catch {
-          setResult({ type: 'error', message: `Owner ${owner} is not registered in MSafe registry` })
-          return
-        }
-      }
-
-      console.log('ownerPubKeys', ownerPubKeys);
-
-      // TODO: fetch nonce from msafe table
-      const creationNonce = 0n // Use timestamp as nonce for demo
-      const msafeAddress = computeMultiSigAddress(ownerPubKeys, threshold, creationNonce)
+      // Use already fetched owner public keys and calculated address
+      const msafeAddress = calculatedMSafeAddress
+      const creationNonce = 0n // Default nonce for new wallets
       
       console.log('Calculated MSafe address:', msafeAddress.toString())
       console.log('Calculated MSafe address:', msafeAddress.toString() === '0x0df5d0cc432314d929d67831192ce9af1a0279a6fd5a6f88b449fd55a0fd9ea7')
@@ -370,6 +368,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
 
       // Sign only (no submit)
       const ret = await provider.signTransaction(payload, opts)
+      console.log('ret', ret)
       const signedBytes = ret instanceof Uint8Array ? ret : ret.result
       if (!signedBytes) throw new Error("Failed to get signed transaction bytes")
 
@@ -384,56 +383,55 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
 
       console.log('provider', provider);
 
-      // const submitPayload = {
-      //   function: `${MSAFE_MODULES_ACCOUNT}::creator::init_wallet_creation`,
-      //   type_arguments: [],
-      //   arguments: [
-      //     owners,
-      //     threshold,
-      //     initBalance.toString(),
-      //     signedBytes,
-      //     signature
-      //   ]
-      // }
+      // Now submit the init_wallet_creation transaction
+      const submitPayload = {
+        function: `${MSAFE_MODULES_ACCOUNT}::creator::init_wallet_creation`,
+        type_arguments: [],
+        arguments: [
+          owners,
+          threshold,
+          initBalance.toString(),
+          toHex(signedBytes), 
+          toHex(signature)
+        ]
+      }
 
-      // await provider.signAndSubmit(submitPayload as TransactionPayload, opts)
-      
-      // // Now create the MSafe creation transaction with the signed payload
-      // const response = await signAndSubmitTransaction({
-      //   sender: account.address,
-      //   data: {
-      //     function: `${MSAFE_MODULES_ACCOUNT}::creator::init_wallet_creation`,
-      //     functionArguments: [
-      //       // Serialize owners array (vector of addresses)
-      //       owners,
-      //       // Threshold as u8
-      //       threshold,
-      //       // Initial balance as u64
-      //       initBalance.toString(),
-      //       // Payload (signed register transaction)
-      //       registerResponse.payload,
-      //       // Signature
-      //       registerResponse.signature
-      //     ]
-      //   }
-      // })
-      
-      // // Wait for transaction confirmation
-      // await aptos.waitForTransaction({
-      //   transactionHash: response.hash
-      // })
+      const submitOpts = {
+        sender: account.address.toString(),
+        sequence_number: 0, // Will be filled by the provider
+        max_gas_amount: MAX_GAS,
+        gas_unit_price: GAS_PX,
+        expiration_timestamp_secs: Math.floor(Date.now() / 1000) + 30 // 30 seconds from now
+      }
 
-      // Recheck registration status to see the new MSafe
-      // await checkRegistration()
+      console.log('Submitting init_wallet_creation transaction...')
+      const submitResult = await provider.signAndSubmit(submitPayload as TransactionPayload, submitOpts)
       
-      setResult({
-        type: 'success',
-        message: `MSafe transaction signed successfully!
-Calculated address: ${msafeAddress}
-Signature: ${toHex(signature)}
-Public key: ${toHex(pubkey)}
-Authenticator variant: ${variant}`
-      })
+      console.log('Transaction submitted:', submitResult)
+      
+      if (submitResult.success) {
+        console.log('MSafe creation transaction submitted successfully!')
+        
+        // Wait a bit and then recheck registration status to see the new MSafe
+        setTimeout(async () => {
+          await checkRegistration()
+        }, 2000)
+        
+        const txHash = (submitResult.result as { hash?: string })?.hash || 'N/A'
+        setResult({
+          type: 'success',
+          message: `MSafe creation transaction submitted! Hash: ${txHash}`,
+          data: {
+            msafeAddress: msafeAddress.toString(),
+            owners,
+            threshold: Number(threshold),
+            initBalance: Number(initBalance),
+            transactionHash: txHash
+          }
+        })
+      } else {
+        throw new Error('Transaction submission failed')
+      }
       
     } catch (err) {
       const error = err as Error
@@ -492,25 +490,72 @@ Authenticator variant: ${variant}`
     }
   }, [account?.address, owners.length])
 
+  // State for storing owner public keys from registry
+  const [ownerPubKeys, setOwnerPubKeys] = useState<string[]>([])
+  const [isLoadingPubKeys, setIsLoadingPubKeys] = useState(false)
+
+  // Fetch public keys from registry when owners change
+  useEffect(() => {
+    const fetchOwnerPubKeys = async () => {
+      if (owners.length === 0 || !connected) {
+        setOwnerPubKeys([])
+        return
+      }
+
+      setIsLoadingPubKeys(true)
+      try {
+        const pubKeys: string[] = []
+        for (const owner of owners) {
+          if (!owner.trim()) {
+            pubKeys.push("")
+            continue
+          }
+          
+          try {
+            const registryData = await aptos.getAccountResource({
+              accountAddress: owner.trim(),
+              resourceType: `${MSAFE_MODULES_ACCOUNT}::registry::OwnerMomentumSafes`
+            })
+            
+            if (registryData?.public_key) {
+              pubKeys.push(registryData.public_key as string)
+            } else {
+              pubKeys.push("")
+            }
+          } catch {
+            // Owner not registered in registry
+            pubKeys.push("")
+          }
+        }
+        setOwnerPubKeys(pubKeys)
+      } catch (error) {
+        console.error("Error fetching owner public keys:", error)
+        setOwnerPubKeys([])
+      } finally {
+        setIsLoadingPubKeys(false)
+      }
+    }
+
+    fetchOwnerPubKeys()
+  }, [owners, connected, aptos])
+
   // Calculate MSafe address based on current owners and threshold
   const calculatedMSafeAddress = useMemo(() => {
-    if (owners.length === 0 || threshold < 1 || threshold > owners.length) {
+    if (owners.length === 0 || threshold < 1 || threshold > owners.length || ownerPubKeys.length !== owners.length) {
       return null
     }
 
     try {
-      // For demonstration, we'll use the current account's public key for all owners
-      // In real implementation, you'd need to fetch public keys for each owner from registry
-      const ownerPubKeys = owners.map(() => account?.publicKey?.toString() || "")
+      // Check if all owners have public keys (are registered)
       if (ownerPubKeys.some(key => !key)) return null
 
-      const creationNonce = 0n // Use 0 as default nonce
+      const creationNonce = 0n // Use 0 as default nonce for new wallets
       return computeMultiSigAddress(ownerPubKeys, threshold, creationNonce)
     } catch (error) {
       console.error("Failed to calculate MSafe address:", error)
       return null
     }
-  }, [owners, threshold, account?.publicKey, computeMultiSigAddress])
+  }, [owners, threshold, ownerPubKeys, computeMultiSigAddress])
 
   // Functions for managing owners array
   const addOwner = () => {
@@ -706,6 +751,29 @@ Authenticator variant: ${variant}`
                 </p>
               </div>
 
+              {/* Owner Registration Status */}
+              {owners.length > 0 && (
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">Owner Registration Status</Label>
+                  <div className="space-y-1">
+                    {owners.map((owner, index) => (
+                      <div key={index} className="flex items-center gap-2 text-xs">
+                        <span className="font-mono text-muted-foreground truncate flex-1">
+                          {owner || "Empty"}
+                        </span>
+                        {isLoadingPubKeys ? (
+                          <Badge variant="secondary">Loading...</Badge>
+                        ) : ownerPubKeys[index] ? (
+                          <Badge variant="default">Registered</Badge>
+                        ) : (
+                          <Badge variant="destructive">Not Registered</Badge>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Calculated MSafe Address */}
               {calculatedMSafeAddress && (
                 <div className="space-y-2">
@@ -715,13 +783,27 @@ Authenticator variant: ${variant}`
                   </div>
                 </div>
               )}
+              
+              {/* Address calculation status */}
+              {!calculatedMSafeAddress && owners.length > 0 && (
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium text-muted-foreground">MSafe Address</Label>
+                  <div className="p-2 bg-muted rounded text-xs text-muted-foreground">
+                    {isLoadingPubKeys 
+                      ? "Loading owner public keys..." 
+                      : ownerPubKeys.some(key => !key)
+                        ? "All owners must be registered first"
+                        : "Calculating address..."}
+                  </div>
+                </div>
+              )}
 
               {/* Create Button */}
               <LoadingButton
                 onClick={createNewMSafe}
                 loading={isCreatingMSafe}
                 className="w-full"
-                disabled={!calculatedMSafeAddress || owners.some(owner => !owner.trim())}
+                disabled={!calculatedMSafeAddress || owners.some(owner => !owner.trim()) || isLoadingPubKeys}
               >
                 {isCreatingMSafe ? "Creating..." : "Create MSafe Wallet"}
               </LoadingButton>
