@@ -28,6 +28,16 @@ interface TransactionOptions {
   expiration_timestamp_secs: number
 }
 
+// Types for MSafe creation nonce handling
+interface PendingMultiSigCreations {
+  nonces: {
+    handle: string
+  }
+  creations: {
+    handle: string
+  }
+}
+
 interface PontemProvider {
   connect: () => Promise<void>
   switchNetwork?: (chainId: number) => Promise<void>
@@ -58,7 +68,7 @@ interface Result {
 }
 
 export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegistryCheckerProps) {
-  const { account, connected, signTransaction, signAndSubmitTransaction, wallet } = useWallet()
+  const { account, connected, signAndSubmitTransaction, wallet } = useWallet()
   const [isRegistered, setIsRegistered] = useState<boolean | null>(null)
   const [registryData, setRegistryData] = useState<RegistryData | null>(null)
   const [isChecking, setIsChecking] = useState(false)
@@ -328,10 +338,8 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
     try {
       // Use already fetched owner public keys and calculated address
       const msafeAddress = calculatedMSafeAddress
-      const creationNonce = 0n // Default nonce for new wallets
       
       console.log('Calculated MSafe address:', msafeAddress.toString())
-      console.log('Calculated MSafe address:', msafeAddress.toString() === '0x0df5d0cc432314d929d67831192ce9af1a0279a6fd5a6f88b449fd55a0fd9ea7')
       console.log('Owners:', owners)
       console.log('Threshold:', threshold)
       console.log('Creation nonce:', creationNonce.toString())
@@ -493,6 +501,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
   // State for storing owner public keys from registry
   const [ownerPubKeys, setOwnerPubKeys] = useState<string[]>([])
   const [isLoadingPubKeys, setIsLoadingPubKeys] = useState(false)
+  const [creationNonce, setCreationNonce] = useState<bigint>(0n)
 
   // Fetch public keys from registry when owners change
   useEffect(() => {
@@ -539,6 +548,74 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
     fetchOwnerPubKeys()
   }, [owners, connected, aptos])
 
+  // Helper functions for nonce retrieval
+  const getCreatorResourceData = useCallback(async (): Promise<PendingMultiSigCreations | null> => {
+    if (!aptos) return null
+    
+    try {
+      const resourceType = `${MSAFE_MODULES_ACCOUNT}::creator::PendingMultiSigCreations`
+      const resource = await aptos.getAccountResource({
+        accountAddress: MSAFE_MODULES_ACCOUNT,
+        resourceType
+      })
+      return resource as PendingMultiSigCreations
+    } catch (error) {
+      console.error("Failed to get creator resource data:", error)
+      return null
+    }
+  }, [aptos])
+
+  const queryNonce = useCallback(async (creations: PendingMultiSigCreations, initiator: string): Promise<string> => {
+    if (!aptos) return "0"
+    
+    try {
+      const nonce = await aptos.getTableItem({
+        handle: creations.nonces.handle,
+        data: {
+          key_type: 'address',
+          value_type: 'u64',
+          key: initiator.startsWith('0x') ? initiator.slice(2) : initiator
+        }
+      })
+      return nonce as string
+    } catch (error) {
+      // If nonce not found, return "0" (first creation for this initiator)
+      if (error instanceof Error && error.message.includes('table_item_not_found')) {
+        return "0"
+      }
+      console.error("Failed to query nonce:", error)
+      return "0"
+    }
+  }, [aptos])
+
+  const getNonce = useCallback(async (initiator: string): Promise<bigint> => {
+    const creations = await getCreatorResourceData()
+    if (!creations) return 0n
+    
+    const nonce = await queryNonce(creations, initiator)
+    return BigInt(nonce)
+  }, [getCreatorResourceData, queryNonce])
+
+  // Fetch nonce when first owner changes
+  useEffect(() => {
+    const firstOwner = owners[0]
+    const fetchNonce = async () => {
+      if (firstOwner && connected && aptos) {
+        try {
+          const nonce = await getNonce(firstOwner)
+          setCreationNonce(nonce)
+        } catch (error) {
+          console.error("Failed to fetch nonce:", error)
+          setCreationNonce(0n)
+        }
+      } else {
+        setCreationNonce(0n)
+      }
+    }
+
+    fetchNonce()
+  }, [owners, connected, aptos, getNonce])
+
   // Calculate MSafe address based on current owners and threshold
   const calculatedMSafeAddress = useMemo(() => {
     if (owners.length === 0 || threshold < 1 || threshold > owners.length || ownerPubKeys.length !== owners.length) {
@@ -549,13 +626,13 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       // Check if all owners have public keys (are registered)
       if (ownerPubKeys.some(key => !key)) return null
 
-      const creationNonce = 0n // Use 0 as default nonce for new wallets
+      // Use the real nonce from the contract
       return computeMultiSigAddress(ownerPubKeys, threshold, creationNonce)
     } catch (error) {
       console.error("Failed to calculate MSafe address:", error)
       return null
     }
-  }, [owners, threshold, ownerPubKeys, computeMultiSigAddress])
+  }, [owners, threshold, ownerPubKeys, computeMultiSigAddress, creationNonce])
 
   // Functions for managing owners array
   const addOwner = () => {
@@ -777,7 +854,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
               {/* Calculated MSafe Address */}
               {calculatedMSafeAddress && (
                 <div className="space-y-2">
-                  <Label className="text-sm font-medium">Calculated MSafe Address</Label>
+                  <Label className="text-sm font-medium">Calculated MSafe Address (Nonce: {creationNonce.toString()})</Label>
                   <div className="p-2 bg-muted rounded text-xs font-mono break-all">
                     {calculatedMSafeAddress.toString()}
                   </div>
