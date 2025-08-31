@@ -68,7 +68,7 @@ interface Result {
 }
 
 export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegistryCheckerProps) {
-  const { account, connected, signAndSubmitTransaction, wallet } = useWallet()
+  const { account, connected, signTransaction, signAndSubmitTransaction, wallet } = useWallet()
   const [isRegistered, setIsRegistered] = useState<boolean | null>(null)
   const [registryData, setRegistryData] = useState<RegistryData | null>(null)
   const [isChecking, setIsChecking] = useState(false)
@@ -303,6 +303,29 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
     return authKey.derivedAddress()
   }, [IMPORT_NONCE])
 
+  const testSignTransaction = async () => {
+    if (!account?.address || !account?.publicKey) {
+      setResult({ type: 'error', message: "Account information not available" })
+      return
+    }
+
+    // 1) Build a RawTransaction with the TS SDK
+    const tx = await aptos.transaction.build.simple({
+      sender: account.address,
+      data: {
+        function: "0x1::aptos_account::transfer",
+        functionArguments: [owners[0], 10_000_000n],
+      },
+    });
+
+    // 2) Ask the wallet to SIGN ONLY
+    const senderAuthenticator = await signTransaction({
+      transactionOrPayload: tx,
+    }); // <-- AccountAuthenticator
+
+    console.log('senderAuthenticator', senderAuthenticator)
+  }
+
   // Create new MSafe wallet
   const createNewMSafe = async () => {
     if (!account?.address || !account?.publicKey) {
@@ -331,7 +354,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       setResult({ type: 'error', message: "All owners must be registered in MSafe registry first" })
       return
     }
-  
+
     setIsCreatingMSafe(true)
     setResult(null)
 
@@ -884,6 +907,16 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
               >
                 {isCreatingMSafe ? "Creating..." : "Create MSafe Wallet"}
               </LoadingButton>
+
+              {/* Test Sign Transaction Button */}
+              <Button
+                onClick={testSignTransaction}
+                variant="outline"
+                className="w-full"
+                disabled={owners.length === 0 || !owners[0]}
+              >
+                Test Sign Transaction
+              </Button>
             </div>
             
             <div className="grid gap-2 text-xs">
