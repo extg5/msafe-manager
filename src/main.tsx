@@ -7,7 +7,7 @@ import { WalletProvider } from './components/wallet-provider.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ThemeProvider defaultTheme="system" storageKey="aptos-signer-theme">
+    <ThemeProvider defaultTheme="system" storageKey="msafe-manager-theme">
       <WalletProvider>
         <App />
       </WalletProvider>

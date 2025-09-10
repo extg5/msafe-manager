@@ -19,7 +19,7 @@ export function Header() {
             />
           </div>
           <div>
-            <h1 className="text-2xl font-bold">Aptos Signer</h1>
+            <h1 className="text-2xl font-bold">Msafe Manager</h1>
             <p className="text-sm text-muted-foreground">Secure message signing tool</p>
           </div>
         </div>

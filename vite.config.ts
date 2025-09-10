@@ -11,5 +11,5 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
-  base: process.env.NODE_ENV === 'production' ? '/aptos-signer/' : '/',
+  base: process.env.NODE_ENV === 'production' ? '/msafe-manager/' : '/',
 })
