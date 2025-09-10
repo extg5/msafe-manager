@@ -21,7 +21,7 @@ interface TransactionPayload {
 }
 
 interface TransactionOptions {
-  sender: string
+  sender?: string
   sequence_number: number
   max_gas_amount: number
   gas_unit_price: number
@@ -221,12 +221,14 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
   // MSafe deployer address for Mainnet
   const IMPORT_NONCE = BigInt('0xffffffffffffffff')
 
+
+  // TODO: Make this configurable via UI
   // === TRANSACTION CONFIG ===
   const META = "Momentum Safe"
   const SEQ = 0
   const MAX_GAS = 12000
   const GAS_PX = 120
-  const EXP = 1756555990
+  const EXP = 1757277595
   const CHAINID = 1
 
   // === HELPERS ===
@@ -386,7 +388,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
             gasUnitPrice: GAS_PX,
             maxGasAmount: MAX_GAS,
             // expireTimestamp: EXP,
-            // accountSequenceNumber: SEQ,
+            accountSequenceNumber: 0,
             // replayProtectionNonce: undefined,
           },
         });
@@ -431,8 +433,6 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       }
 
 
-      const hexPayload = ''///
-
       // Sign only (no submit)
       const ret = await provider.signTransaction(payload, opts)
       console.log('ret', ret)
@@ -447,6 +447,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       console.log("signature (hex):", toHex(signature))      // 64 bytes
 
 
+      // Raw Transaction Hex
       const trxHex = '0xb5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193' + toHex(signedBytes).slice(0, -128).slice(2).slice(0,-70)
 
       // blob for debugging:
@@ -468,7 +469,8 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       }
 
       const submitOpts = {
-        sender: msafeAddress.toString(),
+        // Should be owner address I think, not msafe address
+        // sender: msafeAddress.toString(),
         sequence_number: 0, // Will be filled by the provider
         max_gas_amount: MAX_GAS,
         gas_unit_price: GAS_PX,
