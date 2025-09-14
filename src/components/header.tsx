@@ -19,8 +19,8 @@ export function Header() {
             />
           </div>
           <div>
-            <h1 className="text-2xl font-bold">Msafe Manager</h1>
-            <p className="text-sm text-muted-foreground">Secure message signing tool</p>
+            <h1 className="text-2xl font-bold">MSafe Manager</h1>
+            <p className="text-sm text-muted-foreground">Secure MSafe multisig management</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
