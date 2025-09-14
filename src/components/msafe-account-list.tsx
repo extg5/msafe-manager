@@ -4,6 +4,20 @@ import { Aptos, AptosConfig, Network, Hex } from "@aptos-labs/ts-sdk"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { extractSigFromSignedTx, toHex } from "@/utils/signature"
+
+// Helper function to compare hex strings
+function isHexEqual(hex1: string, hex2: string): boolean {
+  return hex1.toLowerCase() === hex2.toLowerCase()
+}
+
+// Interface for MSafe info
+interface MSafeInfo {
+  owners: string[]
+  public_keys: string[]
+  threshold: number
+  nonce: string
+  metadata: string
+}
 import { LoadingButton } from "@/components/ui/loading-button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -99,6 +113,40 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     }
   }), [])
   const aptos = useMemo(() => new Aptos(aptosConfig), [aptosConfig])
+
+  // Get MSafe information including owners and public keys
+  const getMSafeInfo = useCallback(async (msafeAddress: string): Promise<MSafeInfo | null> => {
+    try {
+      const resource = await aptos.getAccountResource({
+        accountAddress: msafeAddress,
+        resourceType: `${MSAFE_MODULES}::momentum_safe::Momentum`
+      })
+
+      if (resource) {
+        const msafeData = resource as {
+          info: {
+            owners: string[]
+            public_keys: string[]
+            threshold: number
+            nonce: string
+            metadata: string
+          }
+        }
+        
+        return {
+          owners: msafeData.info.owners,
+          public_keys: msafeData.info.public_keys,
+          threshold: msafeData.info.threshold,
+          nonce: msafeData.info.nonce,
+          metadata: msafeData.info.metadata
+        }
+      }
+      return null
+    } catch (error) {
+      console.error('Failed to get MSafe info:', error)
+      return null
+    }
+  }, [aptos])
 
   // Check registration status and fetch MSafe accounts
   const checkRegistration = useCallback(async () => {
@@ -524,8 +572,27 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       // console.log("pubkey (hex):", toHex(pubkey))
       console.log("signature (hex):", toHex(signature))
 
-      // Get public key index (assuming 0 for now, this might need to be determined dynamically)
-      const pkIndex = 0
+      // Get MSafe information to find the public key index
+      const msafeInfo = await getMSafeInfo(selectedAccount.address)
+      if (!msafeInfo) {
+        throw new Error('Failed to get MSafe information')
+      }
+
+      // Find the index of the current account's public key
+      const currentAccountPubKey = account.publicKey?.toString() || ''
+      const pkIndex = msafeInfo.public_keys.findIndex((pk) => 
+        isHexEqual(pk, currentAccountPubKey)
+      )
+      
+      if (pkIndex === -1) {
+        throw new Error('Current account is not an owner of this MSafe')
+      }
+      
+      console.log('Found public key index:', pkIndex, 'for public key:', currentAccountPubKey)
+
+      console.log('MSafe address:', selectedAccount.address)
+      const msafeAddress = selectedAccount.address.slice(2)
+      console.log('MSafe address without 0x:', msafeAddress)
 
       const trxHex = '0xb5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193' + toHex(signedBytes).slice(0, -128).slice(0,-70)
 
@@ -548,15 +615,13 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         type_arguments: [],
         arguments: [
           selectedAccount.address, // msafe_address
-          pkIndex, // pk_index
+          `${pkIndex}`, // pk_index
           trxHex, // payload as vector<u8>
           "0x" + toHex(signature) // signature as vector<u8>
         ]
       }
-      // const sequenceNumber2 = await getSequenceNumber(selectedAccount.address)
       const opts2 = {
-        // sender: selectedAccount.address,
-        // sequence_number: sequenceNumber,
+        sender: account.address,
         max_gas_amount: 12000,
         gas_unit_price: 120,
         expiration_timestamp_secs: Math.floor(Date.now() / 1000) + 604800, // 1 week from now
@@ -578,7 +643,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         return newSet
       })
     }
-  }, [selectedAccount, account, withdrawalRequests, signAndSubmitTransaction, getSequenceNumber, loadWithdrawalRequests])
+  }, [selectedAccount, account, withdrawalRequests, getSequenceNumber, loadWithdrawalRequests, getMSafeInfo])
 
   // Create withdrawal request
   const createWithdrawalRequest = useCallback(async (formData: WithdrawalFormData) => {
