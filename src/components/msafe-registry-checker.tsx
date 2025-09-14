@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Shield, UserCheck, UserPlus, CheckCircle, XCircle, Plus, X } from "lucide-react"
+import { extractSigFromSignedTx, toHex } from "@/utils/signature"
 
 // MSafe deployer address for Mainnet from the official documentation
 // https://doc.m-safe.io/aptos/developers/system/msafe-contracts#deployed-smart-contract
@@ -232,39 +233,6 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
   const CHAINID = 1
 
   // === HELPERS ===
-  const toHex = (u8: Uint8Array | number[]): string => {
-    const bytes = u8 instanceof Uint8Array ? u8 : new Uint8Array(u8)
-    return "0x" + Array.from(bytes).map(b => b.toString(16).padStart(2,"0")).join("")
-  }
-
-  // Extracts Ed25519 {variant=0x00, pubkey(32), signature(64)} from the end of BCS(SignedTransaction)
-  const extractSigFromSignedTx = (signedBytes: Uint8Array | number[]) => {
-    const bytes = signedBytes instanceof Uint8Array ? signedBytes : new Uint8Array(signedBytes)
-    if (bytes.length < 1 + 1 + 32 + 1 + 64) throw new Error("SignedTransaction too short")
-
-    // Tail layout (BCS):
-    // ... [authenticator]
-    //    variant(1B = 0x00 for ed25519)
-    //    pubkey:  ULEB len (should be 0x20) + 32 bytes
-    //    signature: ULEB len (should be 0x40) + 64 bytes
-
-    const sigLen = bytes[bytes.length - 65] // byte right before the 64 sig bytes
-    if (sigLen !== 0x40) throw new Error(`Unexpected signature length tag: 0x${sigLen.toString(16)}`)
-    const signature = bytes.slice(bytes.length - 64)
-
-    const pkLenIdx = bytes.length - 65 - 33 // 1 (pk len) + 32 (pk) + 1 (sig len) + 64 (sig)
-    const pkLen = bytes[pkLenIdx]
-    if (pkLen !== 0x20) throw new Error(`Unexpected pubkey length tag: 0x${pkLen.toString(16)}`)
-    const pubkey = bytes.slice(pkLenIdx + 1, pkLenIdx + 1 + 32)
-
-    const variant = bytes[pkLenIdx - 1]
-    if (variant !== 0x00) {
-      // 0x01 would be multiEd25519 etc. You can extend this if you ever get other variants.
-      throw new Error(`Unsupported authenticator variant: 0x${variant.toString(16)}`)
-    }
-
-    return { variant, pubkey, signature }
-  }
 
   // Parse public key from various formats
   const parsePubKey = (publicKey: string | Uint8Array | Hex): Ed25519PublicKey => {
@@ -442,13 +410,13 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
       // --- extract & print JUST the signature (and pubkey) ---
       const { variant, pubkey, signature } = extractSigFromSignedTx(signedBytes)
       console.log("authenticator variant:", variant)         // 0 => Ed25519
-      console.log("trx (hex):", toHex(signedBytes))            
-      console.log("pubkey (hex):", toHex(pubkey))            // 32 bytes
-      console.log("signature (hex):", toHex(signature))      // 64 bytes
+      console.log("trx (hex):", "0x" + toHex(signedBytes))            
+      console.log("pubkey (hex):", "0x" + toHex(pubkey))            // 32 bytes
+      console.log("signature (hex):", "0x" + toHex(signature))      // 64 bytes
 
 
       // Raw Transaction Hex
-      const trxHex = '0xb5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193' + toHex(signedBytes).slice(0, -128).slice(2).slice(0,-70)
+      const trxHex = '0xb5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193' + toHex(signedBytes).slice(0, -128).slice(0,-70)
 
       // blob for debugging:
       console.log("trxHex:", trxHex)
@@ -464,7 +432,7 @@ export function MSafeRegistryChecker({ onRegistrationStatusChange }: MSafeRegist
           threshold,
           String(parseFloat(initBalance) * 10 ** 8),
           trxHex, 
-          toHex(signature)
+          "0x" + toHex(signature)
         ]
       }
 

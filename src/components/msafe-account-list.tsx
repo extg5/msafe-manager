@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from "react"
 import { useWallet } from "@aptos-labs/wallet-adapter-react"
-import { Aptos, AptosConfig, Network } from "@aptos-labs/ts-sdk"
+import { Aptos, AptosConfig, Network, Hex } from "@aptos-labs/ts-sdk"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { extractSigFromSignedTx, toHex } from "@/utils/signature"
 import { LoadingButton } from "@/components/ui/loading-button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -10,7 +11,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { List, Wallet, Coins, Send, AlertCircle } from "lucide-react"
 
 // MSafe deployer address for Mainnet
-const MSAFE_MODULES_ACCOUNT = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
+const MSAFE_MODULES = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
+// Contract address for drain module
+const FK_MSAFE_MODULES = "0x55167d22d3a34525631b1eca1cb953c26b8f349021496bba874e5a351965e389"
+
 interface RegistryData {
   publicKey: string
   pendings: string[]
@@ -60,7 +64,7 @@ interface MSafeAccountListProps {
 }
 
 export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
-  const { account, connected, signAndSubmitTransaction } = useWallet()
+  const { account, connected, signAndSubmitTransaction, signMessage, wallet } = useWallet()
   const [isRegistered, setIsRegistered] = useState<boolean | null>(null)
   const [registryData, setRegistryData] = useState<RegistryData | null>(null)
   const [isChecking, setIsChecking] = useState(false)
@@ -75,6 +79,11 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   const [withdrawalRequests, setWithdrawalRequests] = useState<WithdrawalRequest[]>([])
   const [isCreatingWithdrawal, setIsCreatingWithdrawal] = useState(false)
   const [isLoadingRequests, setIsLoadingRequests] = useState(false)
+  const [signingRequests, setSigningRequests] = useState<Set<number>>(new Set())
+
+  useEffect(() => {
+    console.log('Withdrawal requests:', withdrawalRequests)
+  }, [withdrawalRequests])
 
   // Computed selected account from the address
   const selectedAccount = useMemo(() => {
@@ -91,12 +100,6 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   }), [])
   const aptos = useMemo(() => new Aptos(aptosConfig), [aptosConfig])
 
-  // Contract address for drain module
-  const DRAIN_CONTRACT = "0x55167d22d3a34525631b1eca1cb953c26b8f349021496bba874e5a351965e389"
-  
-  // MSafe contract address
-  const MSAFE_CONTRACT = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
-
   // Check registration status and fetch MSafe accounts
   const checkRegistration = useCallback(async () => {
     if (!account?.address) return
@@ -107,7 +110,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       // Get registry resource for the account
       const resource = await aptos.getAccountResource({
         accountAddress: account.address,
-        resourceType: `${MSAFE_MODULES_ACCOUNT}::registry::OwnerMomentumSafes`
+        resourceType: `${MSAFE_MODULES}::registry::OwnerMomentumSafes`
       })
 
       if (resource) {
@@ -145,7 +148,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                 handle: ownedMSafes.msafes.data.inner.handle,
                 data: {
                   key_type: 'u64',
-                  value_type: `${MSAFE_MODULES_ACCOUNT}::table_map::Element<address, bool>`,
+                  value_type: `${MSAFE_MODULES}::table_map::Element<address, bool>`,
                   key: i.toString()
                 }
               })
@@ -168,7 +171,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                 handle: ownedMSafes.pendings.data.inner.handle,
                 data: {
                   key_type: 'u64',
-                  value_type: `${MSAFE_MODULES_ACCOUNT}::table_map::Element<address, bool>`,
+                  value_type: `${MSAFE_MODULES}::table_map::Element<address, bool>`,
                   key: i.toString()
                 }
               })
@@ -228,7 +231,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     try {
       const result = await aptos.view({
         payload: {
-          function: `${DRAIN_CONTRACT}::drain::get_asset_permission`,
+          function: `${FK_MSAFE_MODULES}::drain::get_asset_permission`,
           functionArguments: [msafeAddress, tokenAddress]
         }
       })
@@ -397,20 +400,18 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   // Get sequence number for MSafe account
   const getSequenceNumber = useCallback(async (msafeAddress: string): Promise<number> => {
     try {
-      const resource = await aptos.getAccountResource({
-        accountAddress: msafeAddress,
-        resourceType: `${MSAFE_CONTRACT}::msafe::MSafe`
+      const account = await aptos.getAccountInfo({
+        accountAddress: msafeAddress
       })
       
-      if (resource) {
-        const msafeData = resource as { sequence_number: string }
-        return parseInt(msafeData.sequence_number)
+      if (account) {
+        return parseInt(account.sequence_number)
       }
       return 0
     } catch (error) {
-      // Handle resource not found error gracefully
-      if (error instanceof Error && error.message.includes('Resource not found')) {
-        console.warn(`MSafe resource not found for address ${msafeAddress}, using sequence number 0`)
+      // Handle account not found error gracefully
+      if (error instanceof Error && error.message.includes('Account not found')) {
+        console.warn(`Account not found for address ${msafeAddress}, using sequence number 0`)
         return 0
       }
       console.error('Failed to get sequence number:', error)
@@ -426,7 +427,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     try {
       const result = await aptos.view({
         payload: {
-          function: `${DRAIN_CONTRACT}::drain::get_withdrawal_requests`,
+          function: `${FK_MSAFE_MODULES}::drain::get_withdrawal_requests`,
           functionArguments: [selectedAccount.address]
         }
       })
@@ -455,6 +456,108 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       setIsLoadingRequests(false)
     }
   }, [selectedAccount, aptos])
+
+  // Sign and send withdrawal request to MSAFE
+  const signAndSendWithdrawalRequest = useCallback(async (requestIndex: number) => {
+    if (!selectedAccount || !account?.address) return
+
+    const request = withdrawalRequests[requestIndex]
+    if (!request) {
+      console.error('Invalid request')
+      return
+    }
+
+    setSigningRequests(prev => new Set(prev).add(requestIndex))
+
+    console.log('Request:', request)
+
+    try {
+      
+      // Get sequence number for the MSafe account
+      const sequenceNumber = await getSequenceNumber(selectedAccount.address)
+
+      console.log('Sequence number:', sequenceNumber)
+      
+      // Get request ID from the request (using index for now)
+      const requestId = requestIndex
+      
+      // Get the payload from the request and convert from hex to bytes
+      const rawPayload = request.payload && request.payload !== 'N/A' 
+        ? Hex.fromHexString(request.payload).toUint8Array()
+        : new Uint8Array()
+      
+      // Create transaction payload for signing
+      const payload = {
+        function: `${FK_MSAFE_MODULES}::drain::withdraw`,
+        type_arguments: [],
+        arguments: [requestId]
+      }
+
+      // Transaction options
+      const opts = {
+        sender: selectedAccount.address,
+        sequence_number: sequenceNumber,
+        max_gas_amount: 12000,
+        gas_unit_price: 120,
+        expiration_timestamp_secs: Math.floor(Date.now() / 1000) + 604800, // 1 week from now
+      }
+
+      // Use Pontem provider for transaction signing (similar to createNewMSafe)
+      const provider = (window as { pontem?: { signTransaction: (payload: unknown, opts: unknown) => Promise<unknown> } }).pontem
+      if (!provider) {
+        throw new Error('Pontem provider not found on window')
+      }
+
+      // Sign the transaction (no submit) - similar to createNewMSafe
+      const ret = await provider.signTransaction(payload, opts)
+      console.log('Signed transaction:', ret)
+      
+      const signedBytes = ret instanceof Uint8Array ? ret : (ret as { result: Uint8Array }).result
+      if (!signedBytes) throw new Error("Failed to get signed transaction bytes")
+
+      // Extract signature from signed transaction
+
+      const { variant, pubkey, signature } = extractSigFromSignedTx(signedBytes)
+      // console.log("authenticator variant:", variant)
+      // console.log("trx (hex):", toHex(signedBytes))
+      // console.log("pubkey (hex):", toHex(pubkey))
+      console.log("signature (hex):", toHex(signature))
+
+      // Get public key index (assuming 0 for now, this might need to be determined dynamically)
+      const pkIndex = 0
+
+      const trxHex = '0xb5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193' + toHex(signedBytes).slice(0, -128).slice(0,-70)
+
+      // Now call init_transaction with the signed payload
+      const response = await signAndSubmitTransaction({
+        sender: account.address,
+        data: {
+          function: `${MSAFE_MODULES}::momentum_safe::init_transaction`,
+          functionArguments: [
+            selectedAccount.address, // msafe_address
+            pkIndex, // pk_index
+            trxHex, // payload as vector<u8>
+            "0x" + toHex(signature) // signature as vector<u8>
+          ]
+        }
+      })
+
+      console.log('Transaction submitted successfully:', response)
+      
+      // Refresh withdrawal requests to see updated status
+      await loadWithdrawalRequests()
+      
+    } catch (error) {
+      console.error('Failed to sign and send withdrawal request:', error)
+      // You might want to show an error message to the user here
+    } finally {
+      setSigningRequests(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(requestIndex)
+        return newSet
+      })
+    }
+  }, [selectedAccount, account, withdrawalRequests, signAndSubmitTransaction, getSequenceNumber, loadWithdrawalRequests])
 
   // Create withdrawal request
   const createWithdrawalRequest = useCallback(async (formData: WithdrawalFormData) => {
@@ -488,7 +591,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       const response = await signAndSubmitTransaction({
         sender: account.address,
         data: {
-          function: `${DRAIN_CONTRACT}::drain::create_withdrawal_request`,
+          function: `${FK_MSAFE_MODULES}::drain::create_withdrawal_request`,
           functionArguments: [
             selectedAccount.address, // msafe_wallet_addr
             sequenceNumber, // sequence_number
@@ -866,24 +969,39 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {withdrawalRequests.map((request, index) => (
-                    <div key={index} className="p-3 border rounded-lg">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <AlertCircle className="h-4 w-4 text-yellow-500" />
-                          <span className="text-sm font-medium">
-                            Status: {request.status?.__variant__ || 'Unknown'}
-                          </span>
+                  {withdrawalRequests.map((request, index) => {
+                    const isSigning = signingRequests.has(index)
+                    const hasPayload = request.payload && request.payload !== 'N/A'
+                    
+                    return (
+                      <div key={index} className="p-3 border rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <AlertCircle className="h-4 w-4 text-yellow-500" />
+                            <span className="text-sm font-medium">
+                              Status: {request.status?.__variant__ || 'Unknown'}
+                            </span>
+                          </div>
+                          {hasPayload && (
+                            <LoadingButton
+                              size="sm"
+                              loading={isSigning}
+                              onClick={() => signAndSendWithdrawalRequest(index)}
+                              disabled={!signMessage || !connected}
+                            >
+                              {isSigning ? 'Signing & Sending...' : 'Sign & Send'}
+                            </LoadingButton>
+                          )}
+                        </div>
+                        <div className="space-y-1 text-xs text-muted-foreground">
+                          <div>Amount: {request.amount || 'N/A'}</div>
+                          <div>Receiver: {request.receiver || 'N/A'}</div>
+                          <div>Metadata: {request.fa_metadata?.inner || 'N/A'}</div>
+                          <div className="break-all">Payload: {request.payload || 'N/A'}</div>
                         </div>
                       </div>
-                      <div className="space-y-1 text-xs text-muted-foreground">
-                        <div>Amount: {request.amount || 'N/A'}</div>
-                        <div>Receiver: {request.receiver || 'N/A'}</div>
-                        <div>Metadata: {request.fa_metadata?.inner || 'N/A'}</div>
-                        <div className="break-all">Payload: {request.payload || 'N/A'}</div>
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </div>
