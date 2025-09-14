@@ -504,7 +504,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       }
 
       // Use Pontem provider for transaction signing (similar to createNewMSafe)
-      const provider = (window as { pontem?: { signTransaction: (payload: unknown, opts: unknown) => Promise<unknown> } }).pontem
+      const provider = (window as { pontem?: { signTransaction: (payload: unknown, opts: unknown) => Promise<unknown>, signAndSubmit: (payload: unknown, opts: unknown) => Promise<unknown> } }).pontem
       if (!provider) {
         throw new Error('Pontem provider not found on window')
       }
@@ -530,18 +530,38 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       const trxHex = '0xb5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193' + toHex(signedBytes).slice(0, -128).slice(0,-70)
 
       // Now call init_transaction with the signed payload
-      const response = await signAndSubmitTransaction({
-        sender: account.address,
-        data: {
-          function: `${MSAFE_MODULES}::momentum_safe::init_transaction`,
-          functionArguments: [
-            selectedAccount.address, // msafe_address
-            pkIndex, // pk_index
-            trxHex, // payload as vector<u8>
-            "0x" + toHex(signature) // signature as vector<u8>
-          ]
-        }
-      })
+      // const response = await signAndSubmitTransaction({
+      //   sender: account.address,
+      //   data: {
+      //     function: `${MSAFE_MODULES}::momentum_safe::init_transaction`,
+      //     functionArguments: [
+      //       selectedAccount.address, // msafe_address
+      //       pkIndex, // pk_index
+      //       trxHex, // payload as vector<u8>
+      //       "0x" + toHex(signature) // signature as vector<u8>
+      //     ]
+      //   }
+      // })
+
+      const payload2 = {
+        function: `${MSAFE_MODULES}::momentum_safe::init_transaction`,
+        type_arguments: [],
+        arguments: [
+          selectedAccount.address, // msafe_address
+          pkIndex, // pk_index
+          trxHex, // payload as vector<u8>
+          "0x" + toHex(signature) // signature as vector<u8>
+        ]
+      }
+      // const sequenceNumber2 = await getSequenceNumber(selectedAccount.address)
+      const opts2 = {
+        // sender: selectedAccount.address,
+        // sequence_number: sequenceNumber,
+        max_gas_amount: 12000,
+        gas_unit_price: 120,
+        expiration_timestamp_secs: Math.floor(Date.now() / 1000) + 604800, // 1 week from now
+      }
+      const response = await provider.signAndSubmit(payload2, opts2)
 
       console.log('Transaction submitted successfully:', response)
       
