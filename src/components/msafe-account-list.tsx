@@ -4,11 +4,13 @@ import { Aptos, AptosConfig, Network } from "@aptos-labs/ts-sdk"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { LoadingButton } from "@/components/ui/loading-button"
-import { List, Wallet, Coins } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { List, Wallet, Coins, Send, AlertCircle } from "lucide-react"
 
 // MSafe deployer address for Mainnet
 const MSAFE_MODULES_ACCOUNT = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
-
 interface RegistryData {
   publicKey: string
   pendings: string[]
@@ -28,10 +30,29 @@ interface AssetPermission {
   amount: string
 }
 
+interface WithdrawalRequest {
+  amount?: string
+  fa_metadata?: {
+    inner?: string
+  }
+  payload?: string
+  receiver?: string
+  status?: {
+    __variant__?: string
+  }
+}
+
 interface MSafeAccount {
   address: string
   balances: TokenBalance[]
   isLoadingBalances: boolean
+  sequenceNumber?: number
+}
+
+interface WithdrawalFormData {
+  selectedToken: string
+  receiver: string
+  amount: string
 }
 
 interface MSafeAccountListProps {
@@ -39,13 +60,21 @@ interface MSafeAccountListProps {
 }
 
 export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
-  const { account, connected } = useWallet()
+  const { account, connected, signAndSubmitTransaction } = useWallet()
   const [isRegistered, setIsRegistered] = useState<boolean | null>(null)
   const [registryData, setRegistryData] = useState<RegistryData | null>(null)
   const [isChecking, setIsChecking] = useState(false)
   const [msafeAccounts, setMsafeAccounts] = useState<MSafeAccount[]>([])
   const [selectedAccountAddress, setSelectedAccountAddress] = useState<string | null>(null)
   const [pendingCount, setPendingCount] = useState(0)
+  const [withdrawalForm, setWithdrawalForm] = useState<WithdrawalFormData>({
+    selectedToken: '0x1::aptos_coin::AptosCoin',
+    receiver: '',
+    amount: '0.0000001'
+  })
+  const [withdrawalRequests, setWithdrawalRequests] = useState<WithdrawalRequest[]>([])
+  const [isCreatingWithdrawal, setIsCreatingWithdrawal] = useState(false)
+  const [isLoadingRequests, setIsLoadingRequests] = useState(false)
 
   // Computed selected account from the address
   const selectedAccount = useMemo(() => {
@@ -64,6 +93,9 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
 
   // Contract address for drain module
   const DRAIN_CONTRACT = "0x55167d22d3a34525631b1eca1cb953c26b8f349021496bba874e5a351965e389"
+  
+  // MSafe contract address
+  const MSAFE_CONTRACT = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
 
   // Check registration status and fetch MSafe accounts
   const checkRegistration = useCallback(async () => {
@@ -362,6 +394,130 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     }
   }, [aptos, getAssetPermission])
 
+  // Get sequence number for MSafe account
+  const getSequenceNumber = useCallback(async (msafeAddress: string): Promise<number> => {
+    try {
+      const resource = await aptos.getAccountResource({
+        accountAddress: msafeAddress,
+        resourceType: `${MSAFE_CONTRACT}::msafe::MSafe`
+      })
+      
+      if (resource) {
+        const msafeData = resource as { sequence_number: string }
+        return parseInt(msafeData.sequence_number)
+      }
+      return 0
+    } catch (error) {
+      // Handle resource not found error gracefully
+      if (error instanceof Error && error.message.includes('Resource not found')) {
+        console.warn(`MSafe resource not found for address ${msafeAddress}, using sequence number 0`)
+        return 0
+      }
+      console.error('Failed to get sequence number:', error)
+      return 0
+    }
+  }, [aptos])
+
+  // Get withdrawal requests
+  const loadWithdrawalRequests = useCallback(async () => {
+    if (!selectedAccount) return
+
+    setIsLoadingRequests(true)
+    try {
+      const result = await aptos.view({
+        payload: {
+          function: `${DRAIN_CONTRACT}::drain::get_withdrawal_requests`,
+          functionArguments: [selectedAccount.address]
+        }
+      })
+
+      console.log('Raw withdrawal requests result:', result)
+
+      if (result && Array.isArray(result)) {
+        // Flatten nested arrays and validate the results
+        const flattenedResult = result.flat(2) // Flatten up to 2 levels deep
+        const validRequests = flattenedResult.filter((item: unknown) => {
+          return item && typeof item === 'object' && 
+                 (item as Record<string, unknown>).amount !== undefined && 
+                 (item as Record<string, unknown>).receiver !== undefined
+        })
+        
+        console.log('Valid withdrawal requests:', validRequests)
+        setWithdrawalRequests(validRequests as WithdrawalRequest[])
+      } else {
+        console.log('No withdrawal requests found or invalid format')
+        setWithdrawalRequests([])
+      }
+    } catch (error) {
+      console.error('Failed to load withdrawal requests:', error)
+      setWithdrawalRequests([])
+    } finally {
+      setIsLoadingRequests(false)
+    }
+  }, [selectedAccount, aptos])
+
+  // Create withdrawal request
+  const createWithdrawalRequest = useCallback(async (formData: WithdrawalFormData) => {
+    if (!selectedAccount || !account?.address) return
+
+    setIsCreatingWithdrawal(true)
+    try {
+      const sequenceNumber = await getSequenceNumber(selectedAccount.address)
+      
+      // Get selected token balance
+      const selectedTokenBalance = selectedAccount.balances.find(
+        balance => balance.coinType === formData.selectedToken
+      )
+      
+      if (!selectedTokenBalance) {
+        throw new Error('Selected token not found')
+      }
+
+      // Extract metadata address from coinType
+      let metadataAddr = '0xa' // Default for APT
+      if (formData.selectedToken === '0x1::aptos_coin::AptosCoin') {
+        metadataAddr = '0xa'
+      } else if (formData.selectedToken.includes('::')) {
+        metadataAddr = formData.selectedToken.split('::')[0]
+      }
+
+      // Convert amount to raw units
+      const amountInRawUnits = Math.floor(parseFloat(formData.amount) * Math.pow(10, selectedTokenBalance.decimals))
+
+      // Use the wallet adapter's signAndSubmitTransaction method
+      const response = await signAndSubmitTransaction({
+        sender: account.address,
+        data: {
+          function: `${DRAIN_CONTRACT}::drain::create_withdrawal_request`,
+          functionArguments: [
+            selectedAccount.address, // msafe_wallet_addr
+            sequenceNumber, // sequence_number
+            formData.receiver, // receiver
+            metadataAddr, // metadata_addr
+            amountInRawUnits // amount
+          ]
+        }
+      })
+
+      console.log('Withdrawal request created:', response)
+      
+      // Reset form
+      setWithdrawalForm({
+        selectedToken: '',
+        receiver: '',
+        amount: ''
+      })
+      
+      // Refresh withdrawal requests
+      await loadWithdrawalRequests()
+      
+    } catch (error) {
+      console.error('Failed to create withdrawal request:', error)
+    } finally {
+      setIsCreatingWithdrawal(false)
+    }
+  }, [selectedAccount, account, getSequenceNumber, loadWithdrawalRequests, signAndSubmitTransaction])
+
   // Load balances for selected account
   const loadAccountBalances = useCallback(async (account: MSafeAccount) => {
     if (account.isLoadingBalances) return
@@ -402,6 +558,21 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       loadAccountBalances(selectedAccount)
     }
   }, [selectedAccount, loadAccountBalances])
+
+  // Load withdrawal requests when account is selected
+  useEffect(() => {
+    if (selectedAccount) {
+      loadWithdrawalRequests()
+    }
+  }, [selectedAccount, loadWithdrawalRequests])
+
+  // Handle form submission
+  const handleWithdrawalSubmit = useCallback((e: React.FormEvent) => {
+    e.preventDefault()
+    if (withdrawalForm.selectedToken && withdrawalForm.receiver && withdrawalForm.amount) {
+      createWithdrawalRequest(withdrawalForm)
+    }
+  }, [withdrawalForm, createWithdrawalRequest])
 
   // Handle account selection
   const handleAccountSelect = useCallback((account: MSafeAccount) => {
@@ -597,17 +768,124 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
               )}
             </div>
 
-            {/* Placeholder for future actions */}
-            <div className="space-y-2">
-              <div className="text-sm font-medium">Actions</div>
-              <div className="p-4 border-2 border-dashed border-muted-foreground/25 rounded-lg text-center">
-                <div className="text-sm text-muted-foreground">
-                  Account actions will be available here
+            {/* Withdrawal Form */}
+            <div className="space-y-4">
+              <div className="text-sm font-medium">Create Withdrawal Request</div>
+              <form onSubmit={handleWithdrawalSubmit} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="token-select">Select Token</Label>
+                  <Select
+                    value={withdrawalForm.selectedToken}
+                    onValueChange={(value) => setWithdrawalForm(prev => ({ ...prev, selectedToken: value }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Choose a token" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {selectedAccount.balances
+                        .filter(balance => parseFloat(balance.availableForWithdrawal || '0') > 0)
+                        .map((balance, index) => {
+                          const availableAmount = parseFloat(balance.availableForWithdrawal || '0') / Math.pow(10, balance.decimals)
+                          return (
+                            <SelectItem key={index} value={balance.coinType}>
+                              <div className="flex items-center justify-between w-full">
+                                <span>{balance.symbol}</span>
+                                <span className="text-xs text-muted-foreground ml-2">
+                                  Available: {availableAmount.toFixed(balance.decimals)}
+                                </span>
+                              </div>
+                            </SelectItem>
+                          )
+                        })}
+                    </SelectContent>
+                  </Select>
                 </div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  (Send transactions, manage permissions, etc.)
+
+                <div className="space-y-2">
+                  <Label htmlFor="receiver">Receiver Address</Label>
+                  <Input
+                    id="receiver"
+                    type="text"
+                    placeholder="0x..."
+                    value={withdrawalForm.receiver}
+                    onChange={(e) => setWithdrawalForm(prev => ({ ...prev, receiver: e.target.value }))}
+                    required
+                  />
                 </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="amount">Amount</Label>
+                  <Input
+                    id="amount"
+                    type="number"
+                    step="0.00000001"
+                    placeholder="0.0"
+                    value={withdrawalForm.amount}
+                    onChange={(e) => setWithdrawalForm(prev => ({ ...prev, amount: e.target.value }))}
+                    required
+                  />
+                </div>
+
+                <Button
+                  type="submit"
+                  disabled={!withdrawalForm.selectedToken || !withdrawalForm.receiver || !withdrawalForm.amount || isCreatingWithdrawal}
+                  className="w-full"
+                >
+                  {isCreatingWithdrawal ? (
+                    <>
+                      <div className="animate-spin h-4 w-4 border-2 border-white rounded-full border-t-transparent mr-2" />
+                      Creating Request...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="h-4 w-4 mr-2" />
+                      Create Withdrawal Request
+                    </>
+                  )}
+                </Button>
+              </form>
+            </div>
+
+            {/* Withdrawal Requests */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-medium">Withdrawal Requests</div>
+                <LoadingButton
+                  variant="outline"
+                  size="sm"
+                  loading={isLoadingRequests}
+                  onClick={loadWithdrawalRequests}
+                >
+                  Refresh
+                </LoadingButton>
               </div>
+              
+              {withdrawalRequests.length === 0 ? (
+                <div className="text-sm text-muted-foreground text-center py-4">
+                  {isLoadingRequests ? 'Loading requests...' : 'No withdrawal requests found'}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {withdrawalRequests.map((request, index) => (
+                    <div key={index} className="p-3 border rounded-lg">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="h-4 w-4 text-yellow-500" />
+                          <span className="text-sm font-medium">
+                            Status: {request.status?.__variant__ || 'Unknown'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="space-y-1 text-xs text-muted-foreground">
+                        <div>Amount: {request.amount || 'N/A'}</div>
+                        <div>Receiver: {request.receiver || 'N/A'}</div>
+                        <div>Metadata: {request.fa_metadata?.inner || 'N/A'}</div>
+                        <div className="break-all">Payload: {request.payload || 'N/A'}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
