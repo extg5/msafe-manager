@@ -472,6 +472,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     console.log('Request:', request)
 
     try {
+      console.log('Selected account:', selectedAccount)
       
       // Get sequence number for the MSafe account
       const sequenceNumber = await getSequenceNumber(selectedAccount.address)
