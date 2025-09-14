@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:custom": "tsc -b && vite build",
+    "build:msafe": "VITE_BASE_PATH=/msafe-manager/ tsc -b && vite build",
+    "build:root": "VITE_BASE_PATH=/ tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
