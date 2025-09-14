@@ -39,11 +39,22 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   const [registryData, setRegistryData] = useState<RegistryData | null>(null)
   const [isChecking, setIsChecking] = useState(false)
   const [msafeAccounts, setMsafeAccounts] = useState<MSafeAccount[]>([])
-  const [selectedAccount, setSelectedAccount] = useState<MSafeAccount | null>(null)
+  const [selectedAccountAddress, setSelectedAccountAddress] = useState<string | null>(null)
   const [pendingCount, setPendingCount] = useState(0)
 
+  // Computed selected account from the address
+  const selectedAccount = useMemo(() => {
+    if (!selectedAccountAddress) return null
+    return msafeAccounts.find(account => account.address === selectedAccountAddress) || null
+  }, [selectedAccountAddress, msafeAccounts])
+
   // Initialize Aptos client for Mainnet
-  const aptosConfig = useMemo(() => new AptosConfig({ network: Network.MAINNET }), [])
+  const aptosConfig = useMemo(() => new AptosConfig({ 
+    network: Network.MAINNET, 
+    clientConfig: {
+      API_KEY: 'AG-AKERERDAVJN5NUDRDEIWKYMKTEXO5TY11'
+    }
+  }), [])
   const aptos = useMemo(() => new Aptos(aptosConfig), [aptosConfig])
 
   // Check registration status and fetch MSafe accounts
@@ -151,7 +162,8 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         
         // Auto-select the first account if available
         if (accounts.length > 0) {
-          handleAccountSelect(accounts[0])
+          setSelectedAccountAddress(accounts[0].address)
+          onAccountSelect?.(accounts[0])
         }
       }
     } catch (err) {
@@ -168,21 +180,47 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     } finally {
       setIsChecking(false)
     }
-  }, [account, aptos])
+  }, [account, aptos, onAccountSelect])
 
   // Fetch token balances for a specific account
   const fetchAccountBalances = useCallback(async (accountAddress: string) => {
     try {
-      // Get account resources to find coin stores
+
+      console.log('Fetching balances for account:', accountAddress)
+
+      const balances: TokenBalance[] = []
+      
+      // Method 1: Get APT balance using the direct method
+      try {
+        const aptAmount = await aptos.getAccountAPTAmount({
+          accountAddress
+        })
+
+        console.log('APT amount:', aptAmount)
+        
+        if (aptAmount > 0) {
+          balances.push({
+            coinType: '0x1::aptos_coin::AptosCoin',
+            amount: aptAmount.toString(), // Convert to smallest unit
+            decimals: 8,
+            symbol: 'APT',
+            name: 'Aptos Coin'
+          })
+        }
+      } catch (error) {
+        console.warn('Failed to get APT balance:', error)
+      }
+      
+      // Method 2: Get other token balances from Coin resources
       const resources = await aptos.getAccountResources({
         accountAddress
       })
 
-      const balances: TokenBalance[] = []
+      console.log('Coin resources:', resources)
       
-      // Look for coin stores (0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>)
+      // Look for coin stores (excluding APT which we already handled)
       for (const resource of resources) {
-        if (resource.type.includes('0x1::coin::CoinStore<')) {
+        if (resource.type.includes('0x1::coin::CoinStore<') && !resource.type.includes('0x1::aptos_coin::AptosCoin')) {
           const coinType = resource.type.match(/0x1::coin::CoinStore<(.+)>/)?.[1]
           if (coinType) {
             const data = resource.data as { coin: { value: string } }
@@ -193,11 +231,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
             let name = 'Unknown Token'
             let decimals = 8 // Default for most tokens
             
-            if (coinType.includes('0x1::aptos_coin::AptosCoin')) {
-              symbol = 'APT'
-              name = 'Aptos Coin'
-              decimals = 8
-            } else if (coinType.includes('0x1::coin::CoinInfo<')) {
+            if (coinType.includes('0x1::coin::CoinInfo<')) {
               // Try to get coin info
               try {
                 const coinInfoResource = await aptos.getAccountResource({
@@ -232,6 +266,70 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
           }
         }
       }
+
+      // Method 2: Get owned tokens (NFTs and other tokens)
+      // try {
+      //   const ownedTokens = await aptos.getAccountOwnedTokens({
+      //     accountAddress
+      //   })
+
+      //   console.log('Owned tokens:', ownedTokens)
+
+      //   // Process owned tokens
+      //   for (const token of ownedTokens) {
+      //     // Skip if already processed as a coin
+      //     const isAlreadyProcessed = balances.some(balance => 
+      //       balance.coinType === token.token_type
+      //     )
+          
+      //     if (!isAlreadyProcessed && token.amount !== '0') {
+      //       // Extract token info
+      //       let symbol = 'Unknown'
+      //       let name = 'Unknown Token'
+      //       let decimals = 8
+
+      //       // Try to get token metadata
+      //       if (token.current_token_data) {
+      //         name = token.current_token_data.token_name || 'Unknown Token'
+      //         symbol = token.current_token_data.token_properties?.symbol || 'Unknown'
+      //       }
+
+      //       // Try to get coin info for fungible tokens
+      //       if (token.token_type.includes('0x1::coin::CoinInfo<')) {
+      //         try {
+      //           const coinInfoResource = await aptos.getAccountResource({
+      //             accountAddress: token.token_type.split('<')[1].split('>')[0],
+      //             resourceType: `${token.token_type.split('<')[1].split('>')[0]}::coin::CoinInfo`
+      //           })
+                
+      //           if (coinInfoResource) {
+      //             const coinInfo = coinInfoResource.data as {
+      //               decimals: number
+      //               symbol: string
+      //               name: string
+      //             }
+      //             decimals = coinInfo.decimals
+      //             symbol = coinInfo.symbol
+      //             name = coinInfo.name
+      //           }
+      //         } catch {
+      //           // Use defaults if coin info not available
+      //         }
+      //       }
+
+      //       balances.push({
+      //         coinType: token.token_type,
+      //         amount: token.amount,
+      //         decimals,
+      //         symbol,
+      //         name
+      //       })
+      //     }
+      //   }
+      // } catch (tokenError) {
+      //   console.warn('Failed to fetch owned tokens:', tokenError)
+      //   // Continue with coin resources only
+      // }
       
       return balances
     } catch (error) {
@@ -252,6 +350,8 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
 
     try {
       const balances = await fetchAccountBalances(account.address)
+
+      console.log('Balances:', balances)
       
       setMsafeAccounts(prev => prev.map(acc => 
         acc.address === account.address 
@@ -268,9 +368,20 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     }
   }, [fetchAccountBalances])
 
+  useEffect(() => {
+    console.log('Selected account:', selectedAccountAddress)
+  }, [selectedAccountAddress])
+
+  // Load balances for selected account when it changes
+  useEffect(() => {
+    if (selectedAccount && selectedAccount.balances.length === 0 && !selectedAccount.isLoadingBalances) {
+      loadAccountBalances(selectedAccount)
+    }
+  }, [selectedAccount, loadAccountBalances])
+
   // Handle account selection
   const handleAccountSelect = useCallback((account: MSafeAccount) => {
-    setSelectedAccount(account)
+    setSelectedAccountAddress(account.address)
     onAccountSelect?.(account)
     
     // Load balances if not already loaded
@@ -287,7 +398,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       setIsRegistered(null)
       setRegistryData(null)
       setMsafeAccounts([])
-      setSelectedAccount(null)
+      setSelectedAccountAddress(null)
     }
   }, [connected, account, checkRegistration])
 
@@ -357,7 +468,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
             <div
               key={msafeAccount.address}
               className={`p-4 border rounded-lg cursor-pointer transition-colors ${
-                selectedAccount?.address === msafeAccount.address
+                selectedAccountAddress === msafeAccount.address
                   ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/20'
                   : 'border-border hover:border-blue-300'
               }`}
