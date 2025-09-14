@@ -192,6 +192,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
 
   // Get asset permission for withdrawal
   const getAssetPermission = useCallback(async (msafeAddress: string, tokenAddress: string): Promise<AssetPermission | null> => {
+    console.log('Getting asset permission for:', msafeAddress, tokenAddress)
     try {
       const result = await aptos.view({
         payload: {
@@ -222,170 +223,137 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       const balances: TokenBalance[] = []
       
       // Method 1: Get APT balance using the direct method
+      // try {
+      //   const aptAmount = await aptos.getAccountAPTAmount({
+      //     accountAddress
+      //   })
+
+      //   console.log('APT amount:', aptAmount)
+        
+      //   if (aptAmount > 0) {
+      //     // Get asset permission for APT withdrawal
+      //     let availableForWithdrawal = '0'
+      //     try {
+      //       const permission = await getAssetPermission(accountAddress, '0xa')
+      //       console.log('APT permission:', permission)
+      //       if (permission && permission.amount) {
+      //         availableForWithdrawal = permission.amount
+      //       }
+      //     } catch (error) {
+      //       console.warn(`Failed to get APT permission:`, error)
+      //     }
+
+      //     balances.push({
+      //       coinType: '0x1::aptos_coin::AptosCoin',
+      //       amount: aptAmount.toString(),
+      //       decimals: 8,
+      //       symbol: 'APT',
+      //       name: 'Aptos Coin',
+      //       availableForWithdrawal
+      //     })
+      //   }
+      // } catch (error) {
+      //   console.warn('Failed to get APT balance:', error)
+      // }
+
+      // Method 1: Get all token balances using FA approach
       try {
-        const aptAmount = await aptos.getAccountAPTAmount({
+
+        const allCoinsData = await aptos.getAccountCoinsData({
           accountAddress
         })
 
-        console.log('APT amount:', aptAmount)
+        console.log('All coins data (FA):', allCoinsData)
         
-        if (aptAmount > 0) {
-          // Get asset permission for APT withdrawal
-          let availableForWithdrawal = '0'
-          try {
-            const permission = await getAssetPermission(accountAddress, '0xa')
-            console.log('APT permission:', permission)
-            if (permission && permission.amount) {
-              availableForWithdrawal = permission.amount
-            }
-          } catch (error) {
-            console.warn(`Failed to get APT permission:`, error)
-          }
-
-          balances.push({
-            coinType: '0x1::aptos_coin::AptosCoin',
-            amount: aptAmount.toString(),
-            decimals: 8,
-            symbol: 'APT',
-            name: 'Aptos Coin',
-            availableForWithdrawal
-          })
-        }
-      } catch (error) {
-        console.warn('Failed to get APT balance:', error)
-      }
-      
-      // Method 2: Get other token balances from Coin resources
-      const resources = await aptos.getAccountResources({
-        accountAddress
-      })
-
-      console.log('Coin resources:', resources)
-      
-      // Look for coin stores (excluding APT which we already handled)
-      for (const resource of resources) {
-        if (resource.type.includes('0x1::coin::CoinStore<') && !resource.type.includes('0x1::aptos_coin::AptosCoin')) {
-          const coinType = resource.type.match(/0x1::coin::CoinStore<(.+)>/)?.[1]
-          if (coinType) {
-            const data = resource.data as { coin: { value: string } }
-            const amount = data.coin.value
-            
+        for (const coinData of allCoinsData) {
+          const coinType = coinData.asset_type
+          const amount = coinData.amount
+          
+          if (amount > 0) {
             // Extract symbol and name from coin type
             let symbol = 'Unknown'
             let name = 'Unknown Token'
             let decimals = 8 // Default for most tokens
-            
-            if (coinType.includes('0x1::coin::CoinInfo<')) {
-              // Try to get coin info
-              try {
-                const coinInfoResource = await aptos.getAccountResource({
-                  accountAddress: coinType.split('<')[1].split('>')[0],
-                  resourceType: `${coinType.split('<')[1].split('>')[0]}::coin::CoinInfo`
-                })
-                
-                if (coinInfoResource) {
-                  const coinInfo = coinInfoResource.data as {
-                    decimals: number
-                    symbol: string
-                    name: string
-                  }
-                  decimals = coinInfo.decimals
-                  symbol = coinInfo.symbol
-                  name = coinInfo.name
-                }
-              } catch {
-                // Use defaults if coin info not available
-              }
-            }
-            
-            if (amount !== '0') {
-              // Get asset permission for withdrawal
-              let availableForWithdrawal = '0'
-              try {
-                const permission = await getAssetPermission(accountAddress, coinType)
-                if (permission && permission.amount) {
-                  availableForWithdrawal = permission.amount
-                }
-              } catch (error) {
-                console.warn(`Failed to get permission for ${coinType}:`, error)
-              }
 
-              balances.push({
-                coinType,
-                amount,
-                decimals,
-                symbol,
-                name,
-                availableForWithdrawal
-              })
+            
+            
+            // Special handling for APT
+            // if (coinType === '0x1::aptos_coin::AptosCoin') {
+            //   symbol = 'APT'
+            //   name = 'Aptos Coin'
+            //   decimals = 8
+            // } else
+            //  {
+            //   // Try to get FA metadata for other tokens
+            //   try {
+            //     const faMetadata = await aptos.getFungibleAssetMetadata({
+            //       minimumLedgerVersion: undefined,
+            //       options: {
+            //         where: {
+            //           asset_type: {
+            //             _eq: coinType
+            //           }
+            //         }
+            //       }
+            //     })
+                
+            //     console.log('FA metadata:', faMetadata)
+                
+            //     if (faMetadata && faMetadata.length > 0) {
+            //       const metadata = faMetadata[0]
+            //       decimals = metadata.decimals || 8
+            //       symbol = metadata.symbol || 'Unknown'
+            //       name = metadata.name || 'Unknown Token'
+            //     }
+            //   } catch (error) {
+            //     console.warn(`Failed to get FA metadata for ${coinType}:`, error)
+            //     // Use defaults if metadata not available
+            //   }
+            // }
+
+            const faMetadata = coinData.metadata
+
+            if (faMetadata) {
+              decimals = faMetadata.decimals || 8
+              symbol = faMetadata.symbol || 'Unknown'
+              name = faMetadata.name || 'Unknown Token'
             }
+            
+            // Get asset permission for withdrawal
+            let availableForWithdrawal = '0'
+            try {
+              // Extract coin address from coinType
+              let coinAddress = '0xa' // Default for APT
+              if (coinType === '0x1::aptos_coin::AptosCoin') {
+                coinAddress = '0xa'
+              } 
+              // else if (coinType.includes('::')) {
+              //   // Extract address from coinType (e.g., "0x123::coin::CoinInfo" -> "0x123")
+              //   coinAddress = coinType.split('::')[0]
+              // }
+              
+              const permission = await getAssetPermission(accountAddress, coinAddress)
+              console.log('Permission:', permission)
+              if (permission && permission.amount) {
+                availableForWithdrawal = permission.amount
+              }
+            } catch (error) {
+              console.warn(`Failed to get permission for ${coinType} (FA):`, error)
+            }
+
+            balances.push({
+              coinType,
+              amount: amount.toString(),
+              decimals,
+              symbol,
+              name,
+              availableForWithdrawal
+            })
           }
         }
+      } catch (error) {
+        console.warn('Failed to get all coins data (FA):', error)
       }
-
-      // Method 2: Get owned tokens (NFTs and other tokens)
-      // try {
-      //   const ownedTokens = await aptos.getAccountOwnedTokens({
-      //     accountAddress
-      //   })
-
-      //   console.log('Owned tokens:', ownedTokens)
-
-      //   // Process owned tokens
-      //   for (const token of ownedTokens) {
-      //     // Skip if already processed as a coin
-      //     const isAlreadyProcessed = balances.some(balance => 
-      //       balance.coinType === token.token_type
-      //     )
-          
-      //     if (!isAlreadyProcessed && token.amount !== '0') {
-      //       // Extract token info
-      //       let symbol = 'Unknown'
-      //       let name = 'Unknown Token'
-      //       let decimals = 8
-
-      //       // Try to get token metadata
-      //       if (token.current_token_data) {
-      //         name = token.current_token_data.token_name || 'Unknown Token'
-      //         symbol = token.current_token_data.token_properties?.symbol || 'Unknown'
-      //       }
-
-      //       // Try to get coin info for fungible tokens
-      //       if (token.token_type.includes('0x1::coin::CoinInfo<')) {
-      //         try {
-      //           const coinInfoResource = await aptos.getAccountResource({
-      //             accountAddress: token.token_type.split('<')[1].split('>')[0],
-      //             resourceType: `${token.token_type.split('<')[1].split('>')[0]}::coin::CoinInfo`
-      //           })
-                
-      //           if (coinInfoResource) {
-      //             const coinInfo = coinInfoResource.data as {
-      //               decimals: number
-      //               symbol: string
-      //               name: string
-      //             }
-      //             decimals = coinInfo.decimals
-      //             symbol = coinInfo.symbol
-      //             name = coinInfo.name
-      //           }
-      //         } catch {
-      //           // Use defaults if coin info not available
-      //         }
-      //       }
-
-      //       balances.push({
-      //         coinType: token.token_type,
-      //         amount: token.amount,
-      //         decimals,
-      //         symbol,
-      //         name
-      //       })
-      //     }
-      //   }
-      // } catch (tokenError) {
-      //   console.warn('Failed to fetch owned tokens:', tokenError)
-      //   // Continue with coin resources only
-      // }
       
       return balances
     } catch (error) {
@@ -614,7 +582,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                         </div>
                         <div className="text-right">
                           <div className="text-sm font-mono">
-                            {totalAmount.toFixed(4)}
+                            {totalAmount.toFixed(balance.decimals)}
                           </div>
                           {isWithdrawable && (
                             <div className="text-xs text-green-600 dark:text-green-400">
