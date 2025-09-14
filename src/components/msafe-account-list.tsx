@@ -21,6 +21,11 @@ interface TokenBalance {
   decimals: number
   symbol?: string
   name?: string
+  availableForWithdrawal?: string
+}
+
+interface AssetPermission {
+  amount: string
 }
 
 interface MSafeAccount {
@@ -56,6 +61,9 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     }
   }), [])
   const aptos = useMemo(() => new Aptos(aptosConfig), [aptosConfig])
+
+  // Contract address for drain module
+  const DRAIN_CONTRACT = "0x55167d22d3a34525631b1eca1cb953c26b8f349021496bba874e5a351965e389"
 
   // Check registration status and fetch MSafe accounts
   const checkRegistration = useCallback(async () => {
@@ -182,6 +190,29 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     }
   }, [account, aptos, onAccountSelect])
 
+  // Get asset permission for withdrawal
+  const getAssetPermission = useCallback(async (msafeAddress: string, tokenAddress: string): Promise<AssetPermission | null> => {
+    try {
+      const result = await aptos.view({
+        payload: {
+          function: `${DRAIN_CONTRACT}::drain::get_asset_permission`,
+          functionArguments: [msafeAddress, tokenAddress]
+        }
+      })
+
+      if (result && result.length > 0) {
+        return {
+          amount: result[0] as string
+        }
+      }
+      
+      return null
+    } catch (error) {
+      console.warn(`Failed to get asset permission for ${tokenAddress}:`, error)
+      return null
+    }
+  }, [aptos])
+
   // Fetch token balances for a specific account
   const fetchAccountBalances = useCallback(async (accountAddress: string) => {
     try {
@@ -199,12 +230,25 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         console.log('APT amount:', aptAmount)
         
         if (aptAmount > 0) {
+          // Get asset permission for APT withdrawal
+          let availableForWithdrawal = '0'
+          try {
+            const permission = await getAssetPermission(accountAddress, '0xa')
+            console.log('APT permission:', permission)
+            if (permission && permission.amount) {
+              availableForWithdrawal = permission.amount
+            }
+          } catch (error) {
+            console.warn(`Failed to get APT permission:`, error)
+          }
+
           balances.push({
             coinType: '0x1::aptos_coin::AptosCoin',
-            amount: aptAmount.toString(), // Convert to smallest unit
+            amount: aptAmount.toString(),
             decimals: 8,
             symbol: 'APT',
-            name: 'Aptos Coin'
+            name: 'Aptos Coin',
+            availableForWithdrawal
           })
         }
       } catch (error) {
@@ -255,12 +299,24 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
             }
             
             if (amount !== '0') {
+              // Get asset permission for withdrawal
+              let availableForWithdrawal = '0'
+              try {
+                const permission = await getAssetPermission(accountAddress, coinType)
+                if (permission && permission.amount) {
+                  availableForWithdrawal = permission.amount
+                }
+              } catch (error) {
+                console.warn(`Failed to get permission for ${coinType}:`, error)
+              }
+
               balances.push({
                 coinType,
                 amount,
                 decimals,
                 symbol,
-                name
+                name,
+                availableForWithdrawal
               })
             }
           }
@@ -336,7 +392,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       console.error(`Failed to fetch balances for ${accountAddress}:`, error)
       return []
     }
-  }, [aptos])
+  }, [aptos, getAssetPermission])
 
   // Load balances for selected account
   const loadAccountBalances = useCallback(async (account: MSafeAccount) => {
@@ -543,19 +599,32 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {selectedAccount.balances.map((balance, index) => (
-                    <div key={index} className="flex items-center justify-between p-2 bg-muted rounded">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium">{balance.symbol}</div>
-                        <div className="text-xs text-muted-foreground truncate">
-                          {balance.name}
+                  {selectedAccount.balances.map((balance, index) => {
+                    const totalAmount = parseFloat(balance.amount) / Math.pow(10, balance.decimals)
+                    const availableAmount = parseFloat(balance.availableForWithdrawal || '0') / Math.pow(10, balance.decimals)
+                    const isWithdrawable = parseFloat(balance.availableForWithdrawal || '0') > 0
+                    
+                    return (
+                      <div key={index} className="flex items-center justify-between p-2 bg-muted rounded">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium">{balance.symbol}</div>
+                          <div className="text-xs text-muted-foreground truncate">
+                            {balance.name}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-mono">
+                            {totalAmount.toFixed(4)}
+                          </div>
+                          {isWithdrawable && (
+                            <div className="text-xs text-green-600 dark:text-green-400">
+                              Available: {availableAmount.toFixed(balance.decimals)}
+                            </div>
+                          )}
                         </div>
                       </div>
-                      <div className="text-sm font-mono">
-                        {(parseFloat(balance.amount) / Math.pow(10, balance.decimals)).toFixed(4)}
-                      </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </div>
