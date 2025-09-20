@@ -589,7 +589,6 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       }
       
       console.log('Found public key index:', pkIndex, 'for public key:', currentAccountPubKey)
-
       console.log('MSafe address:', selectedAccount.address)
       const msafeAddress = selectedAccount.address.slice(2)
       console.log('MSafe address without 0x:', msafeAddress)

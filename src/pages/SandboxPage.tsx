@@ -10,10 +10,12 @@ import {
   Lock,
   GitCompare,
   Shield,
+  TestTube,
 } from "lucide-react"
 import { useState, useEffect, useCallback } from "react"
 import { SignatureComparison } from "@/components/signature-comparison"
 import { MSafeRegistryChecker } from "@/components/msafe-registry-checker"
+import { ProviderChecker } from "@/components/provider-checker"
 import { Badge } from "@/components/ui/badge"
 
 export function SandboxPage() {
@@ -22,6 +24,7 @@ export function SandboxPage() {
   const [showCustomSigner, setShowCustomSigner] = useState(false) // collapsed by default
   const [showSignatureComparison, setShowSignatureComparison] = useState(false) // collapsed by default
   const [showMSafeSection, setShowMSafeSection] = useState(true) // collapsed by default
+  const [showProviderChecker, setShowProviderChecker] = useState(false) // collapsed by default
   
   const [selectedSignature, setSelectedSignature] = useState<"wallet" | "custom" | null>(null)
   // Signature states for comparison
@@ -170,6 +173,27 @@ export function SandboxPage() {
               />
             </CollapsibleSection>
           )}
+
+          {/* Provider Checker */}
+          <CollapsibleSection
+            title="Provider Checker"
+            description="Test transaction signing with predefined payload"
+            icon={TestTube}
+            iconColor="bg-orange-500"
+            isExpanded={showProviderChecker}
+            onToggle={() => setShowProviderChecker(!showProviderChecker)}
+          >
+            {connected && account?.address ? (
+              <ProviderChecker />
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-sm text-muted-foreground mb-3">
+                  Connect your Aptos wallet to test transaction signing
+                </p>
+                <WalletConnector />
+              </div>
+            )}
+          </CollapsibleSection>
         </div>
       </main>
     </div>
