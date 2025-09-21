@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react"
 import { useWallet } from "@aptos-labs/wallet-adapter-react"
-import { Hex, Serializer, hexToAsciiString } from "@aptos-labs/ts-sdk"
-import { BCS, TransactionBuilder, TxnBuilderTypes } from "aptos"
+import { Hex, Serializer, hexToAsciiString, Aptos, AptosConfig, Network } from "@aptos-labs/ts-sdk"
+import { BCS, TransactionBuilder, TxnBuilderTypes, HexString } from "aptos"
 import { Deserializer, SignedTransaction, TransactionAuthenticatorEd25519 } from "@aptos-labs/ts-sdk"
 import { WalletConnectors, type WalletType, RPCClient } from "msafe-wallet-adaptor";
 
@@ -22,10 +22,65 @@ import { SignatureDisplay } from "./signature-display"
 import { ErrorDisplay } from "./error-display"
 import { MSafeAccountSelector } from "./msafe-account-selector"
 import { toHex } from "@/utils/signature"
+import { makeMSafeAPTTransferTx, type APTTransferArgs, type IMultiSig } from "@/utils/msafe-txn"
 
 // MSafe deployer address for Mainnet from the official documentation
 // https://doc.m-safe.io/aptos/developers/system/msafe-contracts#deployed-smart-contract
 const MSAFE_MODULES_ACCOUNT = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
+
+// Types for MSafe Momentum
+type TxnBook = {
+  min_sequence_number: string;
+  max_sequence_number: string;
+  tx_hashes: {
+    inner: {
+      handle: string;
+    };
+  };
+};
+
+type Info = {
+  owners: string[];
+  public_keys: string[];
+  nonce: string;
+  threshold: number;
+};
+
+type Momentum = {
+  info: Info;
+  txn_book: TxnBook;
+};
+
+// Standalone function to get next sequence number for MSafe account
+async function getNextSN(msafeAddress: string): Promise<bigint> {
+  try {
+    // Initialize Aptos client for mainnet
+    const aptosConfig = new AptosConfig({ 
+      network: Network.MAINNET, 
+      clientConfig: {
+        API_KEY: 'AG-AKERERDAVJN5NUDRDEIWKYMKTEXO5TY11'
+      }
+    });
+    const aptos = new Aptos(aptosConfig);
+    
+    // Build the resource type string for Momentum struct
+    const resourceType = `${MSAFE_MODULES_ACCOUNT}::momentum_safe::Momentum`;
+    
+    // Get the MSafe resource from the account
+    const resource = await aptos.getAccountResource({
+      accountAddress: msafeAddress,
+      resourceType: resourceType
+    });
+    
+    const momentum = resource as Momentum;
+    
+    // Return next sequence number (max + 1)
+    return BigInt(momentum.txn_book.max_sequence_number) + 1n;
+  } catch (error) {
+    console.error("Error getting next sequence number:", error);
+    throw new Error(`Failed to get next sequence number for MSafe account ${msafeAddress}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
 
 interface ProviderCheckerProps {
   onSignatureChange?: (signature: string) => void
@@ -94,80 +149,153 @@ export function ProviderChecker({ onSignatureChange }: ProviderCheckerProps) {
         console.log("Network switch not needed or failed")
       }
 
-      // Use the parsed payload directly (should already have function, type_arguments, arguments)
-      const transactionPayload = parsedPayload
+      // Create MSafe APT transfer transaction
+      const [toAddress, amountStr] = parsedPayload.arguments
+      const transferArgs: APTTransferArgs = {
+        to: new HexString(toAddress),
+        amount: BigInt(amountStr)
+      }
 
-      // Use MSafe account as sender if selected, otherwise use wallet account
-      const senderAddress = selectedMSafeAccount
+      // Create MSafe account interface
+      const msafeAccountInterface: IMultiSig = {
+        address: new HexString(selectedMSafeAccount),
+        // rawPublicKey: {} as TxnBuilderTypes.MultiEd25519PublicKey // Placeholder
+      }
 
-      // const msafeAccount = await WalletConnectors['Pontem']();
+      // Create MSafe transaction using our utility function
+      const tx = await makeMSafeAPTTransferTx(msafeAccountInterface, transferArgs, {
+        maxGas: 100000n,
+        gasPrice: 100n,
+        expirationSec: 600, // 10 minutes
+        chainID: 1, // mainnet
+        sequenceNumber: await getNextSN(selectedMSafeAccount),
+      })
+
+      console.log('MSafe transaction created:', tx)
+
+      const msafeAccount = await WalletConnectors['Pontem']();
+      const [p, s] = await msafeAccount.getSigData(tx.raw);
+      console.log('payload', toHex(p))
+      console.log('signature', s)
 
       // console.log('msafeAccount', msafeAccount)
       
-      // Transaction options - using some defaults
-      const opts = {
-        // type: 'entry_function_payload',
-        sender: senderAddress,
-        sequence_number: "0", // Will be filled by provider
-        max_gas_amount: "100000",
-        gas_unit_price: "100",
-        expiration_timestamp_secs: Math.floor(Date.now() / 1000) + 600, // 10 minutes from now
-      }
 
-      console.log('Transaction payload:', transactionPayload)
-      console.log('Transaction opts:', opts)
 
-      // Sign only (no submit)
-      const ret = await provider.signTransaction(transactionPayload, opts)
-      console.log('Provider response:', ret)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+      // // Transaction options - using some defaults
+      // const opts = {
+      //   // type: 'entry_function_payload',
+      //   sender: senderAddress,
+      //   sequence_number: "0", // Will be filled by provider
+      //   max_gas_amount: "100000",
+      //   gas_unit_price: "100",
+      //   expiration_timestamp_secs: Math.floor(Date.now() / 1000) + 600, // 10 minutes from now
+      // }
+
+      // console.log('Transaction payload:', transactionPayload)
+      // console.log('Transaction opts:', opts)
+
+      // // Sign only (no submit)
+      // const ret = await provider.signTransaction(transactionPayload, opts)
+      // console.log('Provider response:', ret)
 
       
-      const signedBytes = ret instanceof Uint8Array ? ret : ret.result
-      // const deserializer = new Deserializer(signedBytes)
-      const deserializer = new BCS.Deserializer(signedBytes);
-      const signedTx = TxnBuilderTypes.SignedTransaction.deserialize(deserializer);
+      // const signedBytes = ret instanceof Uint8Array ? ret : ret.result
+      // // const deserializer = new Deserializer(signedBytes)
+      // const deserializer = new BCS.Deserializer(signedBytes);
+      // const signedTx = TxnBuilderTypes.SignedTransaction.deserialize(deserializer);
 
-      // console.log('signedBytes', toHex(signedBytes))
-      console.log('Signed transaction:', signedTx)
+      // // console.log('signedBytes', toHex(signedBytes))
+      // console.log('Signed transaction:', signedTx)
 
-      const authenticator =
-        signedTx.authenticator as TxnBuilderTypes.TransactionAuthenticatorEd25519;
-      const signingMessage = TransactionBuilder.getSigningMessage(signedTx.raw_txn);
-      const sig = authenticator.signature;
+      // const authenticator =
+      //   signedTx.authenticator as TxnBuilderTypes.TransactionAuthenticatorEd25519;
+      // const signingMessage = TransactionBuilder.getSigningMessage(signedTx.raw_txn);
+      // const sig = authenticator.signature;
 
-      console.log('signingMessage1', toHex(signingMessage))
-      console.log('signature1', sig)
+      // console.log('signingMessage1', toHex(signingMessage))
+      // console.log('signature1', sig)
 
-      const pkIndex = 0
-
-
-      const submitPayload = {
-        function: `${MSAFE_MODULES_ACCOUNT}::momentum_safe::init_transaction`,
-        type_arguments: [],
-        arguments: [
-          selectedMSafeAccount,           // MSafe address
-          `${pkIndex}`,                       // Public key index (u8)
-          BCS.bcsSerializeBytes(signingMessage),    // Signing message (bytes)
-          BCS.bcsToBytes(sig),         // Signature (bytes)
-        ]
-      }
-
-      console.log('Submit payload for init_transaction:', submitPayload)
+      // const pkIndex = 0
 
 
-      const submitOpts = {
-        // Should be owner address I think, not msafe address
-        // sender: account.address.toString(),
-        sequence_number: 0, // Will be filled by the provider
-        max_gas_amount: '100000',
-        gas_unit_price: '100',
-        expiration_timestamp_secs: Math.floor(Date.now() / 1000) + 30 // 30 seconds from now
-      }
+      // const submitPayload = {
+      //   function: `${MSAFE_MODULES_ACCOUNT}::momentum_safe::init_transaction`,
+      //   type_arguments: [],
+      //   arguments: [
+      //     selectedMSafeAccount,           // MSafe address
+      //     `${pkIndex}`,                       // Public key index (u8)
+      //     BCS.bcsSerializeBytes(signingMessage),    // Signing message (bytes)
+      //     BCS.bcsToBytes(sig),         // Signature (bytes)
+      //   ]
+      // }
 
-      console.log('Submitting init_wallet_creation transaction...')
-      const submitResult = await provider.signAndSubmit(submitPayload, submitOpts)
+      // console.log('Submit payload for init_transaction:', submitPayload)
 
-      console.log('Transaction submitted:', submitResult)
+
+      // const submitOpts = {
+      //   // Should be owner address I think, not msafe address
+      //   // sender: account.address.toString(),
+      //   sequence_number: 0, // Will be filled by the provider
+      //   max_gas_amount: '100000',
+      //   gas_unit_price: '100',
+      //   expiration_timestamp_secs: Math.floor(Date.now() / 1000) + 30 // 30 seconds from now
+      // }
+
+      // console.log('Submitting init_wallet_creation transaction...')
+      // const submitResult = await provider.signAndSubmit(submitPayload, submitOpts)
+
+      // console.log('Transaction submitted:', submitResult)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
       // private async makeInitTxTx(
@@ -198,16 +326,16 @@ export function ProviderChecker({ onSignatureChange }: ProviderCheckerProps) {
 
 
       
-      if (!signedBytes) throw new Error("Failed to get signed transaction bytes")
+      // if (!signedBytes) throw new Error("Failed to get signed transaction bytes")
 
-      // Convert to hex string
-      const hexSignature = Hex.fromHexInput(signedBytes).toString()
-      setSignature(hexSignature)
+      // // Convert to hex string
+      // const hexSignature = Hex.fromHexInput(signedBytes).toString()
+      // setSignature(hexSignature)
       
-      // Notify parent component
-      if (onSignatureChange) {
-        onSignatureChange(hexSignature)
-      }
+      // // Notify parent component
+      // if (onSignatureChange) {
+      //   onSignatureChange(hexSignature)
+      // }
 
     } catch (error) {
       console.error("Error signing transaction:", error)
@@ -305,8 +433,5 @@ export function ProviderChecker({ onSignatureChange }: ProviderCheckerProps) {
 
 
 // FROM Msafe: MS; From MY: MY
-// MS: 0.001: b5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb050000000000000002000000000000000000000000000000000000000000000000000000000000000104636f696e087472616e73666572010700000000000000000000000000000000000000000000000000000000000000010a6170746f735f636f696e094170746f73436f696e000220a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb08a086010000000000e8030000000000006e00000000000000d3ffb06a0000000001
-// MS: 0.001: b5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb050000000000000002000000000000000000000000000000000000000000000000000000000000000104636f696e087472616e73666572010700000000000000000000000000000000000000000000000000000000000000010a6170746f735f636f696e094170746f73436f696e000220a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb08a086010000000000e8030000000000006e000000000000002500b16a0000000001
-// MS: 0.002: b5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb050000000000000002000000000000000000000000000000000000000000000000000000000000000104636f696e087472616e73666572010700000000000000000000000000000000000000000000000000000000000000010a6170746f735f636f696e094170746f73436f696e000220a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb08400d030000000000e8030000000000006e000000000000009b00b16a0000000001
-// MY: 0.001: b5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb000000000000000002000000000000000000000000000000000000000000000000000000000000000104636f696e087472616e73666572010700000000000000000000000000000000000000000000000000000000000000010a6170746f735f636f696e094170746f73436f696e0002203311cd72df40ff27ba05d3ad80f8d72334d24b7fcafc284e52acf244580236d408a086010000000000a086010000000000640000000000000003e8cf680000000001
-// MY: 0.001: b5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb000000000000000002000000000000000000000000000000000000000000000000000000000000000104636f696e087472616e73666572010700000000000000000000000000000000000000000000000000000000000000010a6170746f735f636f696e094170746f73436f696e0002203311cd72df40ff27ba05d3ad80f8d72334d24b7fcafc284e52acf244580236d408a086010000000000a086010000000000640000000000000088e8cf680000000001
+// MS: 0.001: b5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb050000000000000002000000000000000000000000000000000000000000000000000000000000000104636f696e087472616e73666572010700000000000000000000000000000000000000000000000000000000000000010a6170746f735f636f696e094170746f73436f696e0002203311cd72df40ff27ba05d3ad80f8d72334d24b7fcafc284e52acf244580236d408a086010000000000e8030000000000006e00000000000000aa2bb16a0000000001
+// MY: 0.001: b5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb050000000000000002000000000000000000000000000000000000000000000000000000000000000104636f696e087472616e73666572010700000000000000000000000000000000000000000000000000000000000000010a6170746f735f636f696e094170746f73436f696e0002203311cd72df40ff27ba05d3ad80f8d72334d24b7fcafc284e52acf244580236d408a086010000000000a0860100000000006400000000000000adfacf680000000001
