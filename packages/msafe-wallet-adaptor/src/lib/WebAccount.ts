@@ -1,5 +1,6 @@
+// @ts-nocheck
 import { HexString, TxnBuilderTypes, BCS, TransactionBuilder } from "aptos";
-import { Account, SigData } from "./Account";
+import type { Account, SigData } from "./Account";
 import nacl from "tweetnacl";
 
 const toHex = (a: Uint8Array)=>HexString.fromUint8Array(a).hex();

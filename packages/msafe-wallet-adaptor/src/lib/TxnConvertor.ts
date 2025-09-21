@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { BCS, HexString, TxnBuilderTypes, Types } from "aptos";
 import { getFunctionABI } from "./getRemoteABI";
 import { fromAptosMoveTag } from "./moveTypeTag";

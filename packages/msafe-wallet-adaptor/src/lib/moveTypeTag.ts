@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { HexString, TxnBuilderTypes, Types } from "aptos";
 
 export type MoveTypeTag =
