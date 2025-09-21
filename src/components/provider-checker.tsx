@@ -1,11 +1,14 @@
 import { useState, useEffect } from "react"
 import { useWallet } from "@aptos-labs/wallet-adapter-react"
-import { Hex } from "@aptos-labs/ts-sdk"
-import { Deserializer, SignedTransaction } from "@aptos-labs/ts-sdk"
+import { Hex, Serializer, hexToAsciiString } from "@aptos-labs/ts-sdk"
+import { BCS, TransactionBuilder, TxnBuilderTypes } from "aptos"
+import { Deserializer, SignedTransaction, TransactionAuthenticatorEd25519 } from "@aptos-labs/ts-sdk"
+import { WalletConnectors, type WalletType, RPCClient } from "msafe-wallet-adaptor";
 
 // Pontem Provider interface
 interface PontemProvider {
   signTransaction(payload: unknown, opts: unknown): Promise<Uint8Array | { result: Uint8Array }>
+  signAndSubmit(payload: unknown, opts: unknown): Promise<Uint8Array | { result: Uint8Array }>
   switchNetwork?(chainId: string): Promise<void>
 }
 
@@ -18,6 +21,11 @@ import { WalletModal } from "./wallet-modal"
 import { SignatureDisplay } from "./signature-display"
 import { ErrorDisplay } from "./error-display"
 import { MSafeAccountSelector } from "./msafe-account-selector"
+import { toHex } from "@/utils/signature"
+
+// MSafe deployer address for Mainnet from the official documentation
+// https://doc.m-safe.io/aptos/developers/system/msafe-contracts#deployed-smart-contract
+const MSAFE_MODULES_ACCOUNT = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
 
 interface ProviderCheckerProps {
   onSignatureChange?: (signature: string) => void
@@ -71,6 +79,11 @@ export function ProviderChecker({ onSignatureChange }: ProviderCheckerProps) {
         throw new Error("Invalid JSON payload")
       }
 
+      // Now submit the init_transaction to MSafe
+      if (!selectedMSafeAccount) {
+        throw new Error("MSafe account must be selected for init_transaction")
+      }
+
       // Use Pontem provider for transaction signing with proper configuration
       const provider = (window as { pontem?: PontemProvider }).pontem
       if (!provider) throw new Error("Pontem provider not found on window")
@@ -85,10 +98,15 @@ export function ProviderChecker({ onSignatureChange }: ProviderCheckerProps) {
       const transactionPayload = parsedPayload
 
       // Use MSafe account as sender if selected, otherwise use wallet account
-      const senderAddress = selectedMSafeAccount || account.address.toString()
+      const senderAddress = selectedMSafeAccount
+
+      // const msafeAccount = await WalletConnectors['Pontem']();
+
+      // console.log('msafeAccount', msafeAccount)
       
       // Transaction options - using some defaults
       const opts = {
+        // type: 'entry_function_payload',
         sender: senderAddress,
         sequence_number: "0", // Will be filled by provider
         max_gas_amount: "100000",
@@ -105,21 +123,77 @@ export function ProviderChecker({ onSignatureChange }: ProviderCheckerProps) {
 
       
       const signedBytes = ret instanceof Uint8Array ? ret : ret.result
-      const deserializer = new Deserializer(signedBytes)
-      const tx = SignedTransaction.deserialize(deserializer);
+      // const deserializer = new Deserializer(signedBytes)
+      const deserializer = new BCS.Deserializer(signedBytes);
+      const signedTx = TxnBuilderTypes.SignedTransaction.deserialize(deserializer);
 
-      console.log('Signed transaction:', tx)
+      // console.log('signedBytes', toHex(signedBytes))
+      console.log('Signed transaction:', signedTx)
 
-      // code from MSafe app
-      //  try {
-      //     const t = await provider.signTransaction(transactionPayload, opts)
-      //       , n = new Deserializer(t.result)
-      //       , tx = SignedTransaction.deserialize(n);
-      //     return Number(tx.raw_txn.expiration_timestamp_secs) !== Number(e.raw.expiration_timestamp_secs) ? (IW.calibration += Number(tx.raw_txn.expiration_timestamp_secs) - Number(e.raw.expiration_timestamp_secs),
-      //     IW.calibration = Math.round(IW.calibration / 2),
-      //     this.walletSignTxnImpl(e)) : tx
-      // } catch (Ek) {
-      //     throw Ek
+      const authenticator =
+        signedTx.authenticator as TxnBuilderTypes.TransactionAuthenticatorEd25519;
+      const signingMessage = TransactionBuilder.getSigningMessage(signedTx.raw_txn);
+      const sig = authenticator.signature;
+
+      console.log('signingMessage1', toHex(signingMessage))
+      console.log('signature1', sig)
+
+      const pkIndex = 0
+
+
+      const submitPayload = {
+        function: `${MSAFE_MODULES_ACCOUNT}::momentum_safe::init_transaction`,
+        type_arguments: [],
+        arguments: [
+          selectedMSafeAccount,           // MSafe address
+          `${pkIndex}`,                       // Public key index (u8)
+          BCS.bcsSerializeBytes(signingMessage),    // Signing message (bytes)
+          BCS.bcsToBytes(sig),         // Signature (bytes)
+        ]
+      }
+
+      console.log('Submit payload for init_transaction:', submitPayload)
+
+
+      const submitOpts = {
+        // Should be owner address I think, not msafe address
+        // sender: account.address.toString(),
+        sequence_number: 0, // Will be filled by the provider
+        max_gas_amount: '100000',
+        gas_unit_price: '100',
+        expiration_timestamp_secs: Math.floor(Date.now() / 1000) + 30 // 30 seconds from now
+      }
+
+      console.log('Submitting init_wallet_creation transaction...')
+      const submitResult = await provider.signAndSubmit(submitPayload, submitOpts)
+
+      console.log('Transaction submitted:', submitResult)
+
+
+      // private async makeInitTxTx(
+      //   signer: Account,
+      //   payload: TxnBuilderTypes.SigningMessage,
+      //   signature: TxnBuilderTypes.Ed25519Signature,
+      //   opts: Options
+      // ) {
+      //   // TODO: do not query for resource again;
+      //   const txBuilder = new AptosEntryTxnBuilder();
+      //   const pkIndex = this.getIndex(signer.publicKey());
+      //   const config = await applyDefaultOptions(signer.address(), opts);
+
+      //   return txBuilder
+      //     .addr(DEPLOYER)
+      //     .module(MODULES.MOMENTUM_SAFE)
+      //     .method(FUNCTIONS.MSAFE_INIT_TRANSACTION)
+      //     .from(signer.address())
+      //     .withTxConfig(config)
+      //     .args([
+      //       BCS.bcsToBytes(TxnBuilderTypes.AccountAddress.fromHex(this.address)),
+      //       BCS.bcsSerializeU8(pkIndex),
+      //       BCS.bcsSerializeBytes(payload),
+      //       BCS.bcsToBytes(signature),
+      //     ])
+      //     .build(signer.account);
       // }
 
 
@@ -228,3 +302,11 @@ export function ProviderChecker({ onSignatureChange }: ProviderCheckerProps) {
     </div>
   )
 }
+
+
+// FROM Msafe: MS; From MY: MY
+// MS: 0.001: b5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb050000000000000002000000000000000000000000000000000000000000000000000000000000000104636f696e087472616e73666572010700000000000000000000000000000000000000000000000000000000000000010a6170746f735f636f696e094170746f73436f696e000220a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb08a086010000000000e8030000000000006e00000000000000d3ffb06a0000000001
+// MS: 0.001: b5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb050000000000000002000000000000000000000000000000000000000000000000000000000000000104636f696e087472616e73666572010700000000000000000000000000000000000000000000000000000000000000010a6170746f735f636f696e094170746f73436f696e000220a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb08a086010000000000e8030000000000006e000000000000002500b16a0000000001
+// MS: 0.002: b5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb050000000000000002000000000000000000000000000000000000000000000000000000000000000104636f696e087472616e73666572010700000000000000000000000000000000000000000000000000000000000000010a6170746f735f636f696e094170746f73436f696e000220a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb08400d030000000000e8030000000000006e000000000000009b00b16a0000000001
+// MY: 0.001: b5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb000000000000000002000000000000000000000000000000000000000000000000000000000000000104636f696e087472616e73666572010700000000000000000000000000000000000000000000000000000000000000010a6170746f735f636f696e094170746f73436f696e0002203311cd72df40ff27ba05d3ad80f8d72334d24b7fcafc284e52acf244580236d408a086010000000000a086010000000000640000000000000003e8cf680000000001
+// MY: 0.001: b5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193a7d0fbd203b7286f2c725a17579e17773150d70c16c17e68d69d792d2c3704cb000000000000000002000000000000000000000000000000000000000000000000000000000000000104636f696e087472616e73666572010700000000000000000000000000000000000000000000000000000000000000010a6170746f735f636f696e094170746f73436f696e0002203311cd72df40ff27ba05d3ad80f8d72334d24b7fcafc284e52acf244580236d408a086010000000000a086010000000000640000000000000088e8cf680000000001
