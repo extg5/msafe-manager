@@ -136,6 +136,79 @@ export class AptosCoinTransferTxnBuilder {
   }
 }
 
+// Generic entry function transaction builder (from CLI-MSafe)
+export class AptosEntryTxnBuilder {
+  private _addr: HexString | undefined;
+  private _module: string | undefined;
+  private _method: string | undefined;
+  private _fromAddress: HexString | undefined;
+  private _config: TxConfig | undefined;
+  private _args: BCS.Bytes[] = [];
+  private _typeArgs: TxnBuilderTypes.TypeTag[] = [];
+
+  addr(addr: HexString | string): this {
+    this._addr = HexString.ensure(addr);
+    return this;
+  }
+
+  module(module: string): this {
+    this._module = module;
+    return this;
+  }
+
+  method(method: string): this {
+    this._method = method;
+    return this;
+  }
+
+  from(fromAddress: HexString): this {
+    this._fromAddress = fromAddress;
+    return this;
+  }
+
+  withTxConfig(config: TxConfig): this {
+    this._config = config;
+    return this;
+  }
+
+  args(args: BCS.Bytes[]): this {
+    this._args = args;
+    return this;
+  }
+
+  typeArgs(typeArgs: TxnBuilderTypes.TypeTag[]): this {
+    this._typeArgs = typeArgs;
+    return this;
+  }
+
+  async build(sender: IAccount): Promise<Transaction> {
+    if (!this._addr || !this._module || !this._method || !this._fromAddress || !this._config) {
+      throw new Error("Missing required parameters for entry function transaction");
+    }
+
+    const payload = new TxnBuilderTypes.TransactionPayloadEntryFunction(
+      TxnBuilderTypes.EntryFunction.natural(
+        `${this._addr}::${this._module}`,
+        this._method,
+        this._typeArgs,
+        this._args
+      )
+    );
+
+    const rawTxn = new TxnBuilderTypes.RawTransaction(
+      TxnBuilderTypes.AccountAddress.fromHex(this._fromAddress),
+      this._config.sequenceNumber,
+      payload,
+      this._config.maxGas,
+      this._config.gasPrice,
+      BigInt(Math.floor(Date.now() / 1000) + this._config.expirationSec),
+      new TxnBuilderTypes.ChainId(this._config.chainID)
+    );
+
+    return new Transaction(rawTxn);
+  }
+}
+
 // Transaction class (simplified version from CLI-MSafe)
 export class Transaction {
   raw: TxnBuilderTypes.RawTransaction;
@@ -208,4 +281,40 @@ export async function makeMSafeAPTTransferTx(
     .build(sender);
 
   return new MSafeTransaction(tx.raw);
+}
+
+/**
+ * Creates an MSafe init_transaction transaction
+ * @param signer - The account that will sign and submit the init transaction
+ * @param msafeAddress - The MSafe account address
+ * @param pkIndex - Public key index in the MSafe
+ * @param payload - The signing message (transaction payload)
+ * @param signature - The Ed25519 signature
+ * @param opts - Optional transaction configuration
+ * @returns Promise<Transaction> - The constructed init transaction
+ */
+export async function makeInitTx(
+  signer: IAccount,
+  msafeAddress: HexString,
+  pkIndex: number,
+  payload: TxnBuilderTypes.SigningMessage,
+  signature: TxnBuilderTypes.Ed25519Signature,
+  opts?: Options
+): Promise<Transaction> {
+  const config = await applyDefaultOptions(signer.address, opts);
+  const txBuilder = new AptosEntryTxnBuilder();
+
+  return txBuilder
+    .addr(MSAFE_MODULES_ACCOUNT)
+    .module(MODULES.MOMENTUM_SAFE)
+    .method(FUNCTIONS.MSAFE_INIT_TRANSACTION)
+    .from(signer.address)
+    .withTxConfig(config)
+    .args([
+      BCS.bcsToBytes(TxnBuilderTypes.AccountAddress.fromHex(msafeAddress)),
+      BCS.bcsSerializeU8(pkIndex),
+      BCS.bcsSerializeBytes(payload),
+      BCS.bcsToBytes(signature),
+    ])
+    .build(signer);
 }

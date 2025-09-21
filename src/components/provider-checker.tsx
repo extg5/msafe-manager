@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react"
 import { useWallet } from "@aptos-labs/wallet-adapter-react"
 import { Hex, Serializer, hexToAsciiString, Aptos, AptosConfig, Network } from "@aptos-labs/ts-sdk"
-import { BCS, TransactionBuilder, TxnBuilderTypes, HexString } from "aptos"
+import { BCS, TransactionBuilder, TxnBuilderTypes, HexString, AptosClient as AptosClientOld } from "aptos"
 import { Deserializer, SignedTransaction, TransactionAuthenticatorEd25519 } from "@aptos-labs/ts-sdk"
 import { WalletConnectors, type WalletType, RPCClient } from "msafe-wallet-adaptor";
 
@@ -22,7 +22,7 @@ import { SignatureDisplay } from "./signature-display"
 import { ErrorDisplay } from "./error-display"
 import { MSafeAccountSelector } from "./msafe-account-selector"
 import { toHex } from "@/utils/signature"
-import { makeMSafeAPTTransferTx, type APTTransferArgs, type IMultiSig } from "@/utils/msafe-txn"
+import { makeMSafeAPTTransferTx, makeInitTx, type APTTransferArgs, type IMultiSig, type IAccount } from "@/utils/msafe-txn"
 
 // MSafe deployer address for Mainnet from the official documentation
 // https://doc.m-safe.io/aptos/developers/system/msafe-contracts#deployed-smart-contract
@@ -178,164 +178,45 @@ export function ProviderChecker({ onSignatureChange }: ProviderCheckerProps) {
       console.log('payload', toHex(p))
       console.log('signature', s)
 
-      // console.log('msafeAccount', msafeAccount)
-      
+      // Create signer account interface for the current user
+      const signerAccount: IAccount = {
+        address: new HexString(account.address.toString()),
+        publicKey: () => {
+          if (!account.publicKey) {
+            throw new Error("Public key not available from wallet");
+          }
+          // Convert the public key string to Ed25519PublicKey
+          const publicKeyBytes = new HexString(account.publicKey.toString()).toUint8Array();
+          return new TxnBuilderTypes.Ed25519PublicKey(publicKeyBytes);
+        }
+      };
+
+      // Create the init transaction using our utility function
+      const pkIndex = 0; // Assuming first public key
+      const initTx = await makeInitTx(
+        signerAccount,
+        new HexString(selectedMSafeAccount),
+        pkIndex,
+        p, // signing message (payload)
+        s, // signature
+        {
+          maxGas: 100000n,
+          gasPrice: 100n,
+          expirationSec: 30, // 30 seconds
+          chainID: 1, // mainnet,
+          sequenceNumber: 29n,
+        }
+      );
+
+      console.log('Init transaction created:', initTx)
+
+      const signedInitTx = await msafeAccount.sign(initTx.raw)
+      console.log('Signed init transaction:', signedInitTx)
+
+      const aptosClient = new AptosClientOld('https://fullnode.mainnet.aptoslabs.com');
+      const txRes = await aptosClient.submitSignedBCSTransaction(signedInitTx)
+      console.log('Transaction submitted:', txRes)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      // // Transaction options - using some defaults
-      // const opts = {
-      //   // type: 'entry_function_payload',
-      //   sender: senderAddress,
-      //   sequence_number: "0", // Will be filled by provider
-      //   max_gas_amount: "100000",
-      //   gas_unit_price: "100",
-      //   expiration_timestamp_secs: Math.floor(Date.now() / 1000) + 600, // 10 minutes from now
-      // }
-
-      // console.log('Transaction payload:', transactionPayload)
-      // console.log('Transaction opts:', opts)
-
-      // // Sign only (no submit)
-      // const ret = await provider.signTransaction(transactionPayload, opts)
-      // console.log('Provider response:', ret)
-
-      
-      // const signedBytes = ret instanceof Uint8Array ? ret : ret.result
-      // // const deserializer = new Deserializer(signedBytes)
-      // const deserializer = new BCS.Deserializer(signedBytes);
-      // const signedTx = TxnBuilderTypes.SignedTransaction.deserialize(deserializer);
-
-      // // console.log('signedBytes', toHex(signedBytes))
-      // console.log('Signed transaction:', signedTx)
-
-      // const authenticator =
-      //   signedTx.authenticator as TxnBuilderTypes.TransactionAuthenticatorEd25519;
-      // const signingMessage = TransactionBuilder.getSigningMessage(signedTx.raw_txn);
-      // const sig = authenticator.signature;
-
-      // console.log('signingMessage1', toHex(signingMessage))
-      // console.log('signature1', sig)
-
-      // const pkIndex = 0
-
-
-      // const submitPayload = {
-      //   function: `${MSAFE_MODULES_ACCOUNT}::momentum_safe::init_transaction`,
-      //   type_arguments: [],
-      //   arguments: [
-      //     selectedMSafeAccount,           // MSafe address
-      //     `${pkIndex}`,                       // Public key index (u8)
-      //     BCS.bcsSerializeBytes(signingMessage),    // Signing message (bytes)
-      //     BCS.bcsToBytes(sig),         // Signature (bytes)
-      //   ]
-      // }
-
-      // console.log('Submit payload for init_transaction:', submitPayload)
-
-
-      // const submitOpts = {
-      //   // Should be owner address I think, not msafe address
-      //   // sender: account.address.toString(),
-      //   sequence_number: 0, // Will be filled by the provider
-      //   max_gas_amount: '100000',
-      //   gas_unit_price: '100',
-      //   expiration_timestamp_secs: Math.floor(Date.now() / 1000) + 30 // 30 seconds from now
-      // }
-
-      // console.log('Submitting init_wallet_creation transaction...')
-      // const submitResult = await provider.signAndSubmit(submitPayload, submitOpts)
-
-      // console.log('Transaction submitted:', submitResult)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      // private async makeInitTxTx(
-      //   signer: Account,
-      //   payload: TxnBuilderTypes.SigningMessage,
-      //   signature: TxnBuilderTypes.Ed25519Signature,
-      //   opts: Options
-      // ) {
-      //   // TODO: do not query for resource again;
-      //   const txBuilder = new AptosEntryTxnBuilder();
-      //   const pkIndex = this.getIndex(signer.publicKey());
-      //   const config = await applyDefaultOptions(signer.address(), opts);
-
-      //   return txBuilder
-      //     .addr(DEPLOYER)
-      //     .module(MODULES.MOMENTUM_SAFE)
-      //     .method(FUNCTIONS.MSAFE_INIT_TRANSACTION)
-      //     .from(signer.address())
-      //     .withTxConfig(config)
-      //     .args([
-      //       BCS.bcsToBytes(TxnBuilderTypes.AccountAddress.fromHex(this.address)),
-      //       BCS.bcsSerializeU8(pkIndex),
-      //       BCS.bcsSerializeBytes(payload),
-      //       BCS.bcsToBytes(signature),
-      //     ])
-      //     .build(signer.account);
-      // }
-
-
-      
-      // if (!signedBytes) throw new Error("Failed to get signed transaction bytes")
-
-      // // Convert to hex string
-      // const hexSignature = Hex.fromHexInput(signedBytes).toString()
-      // setSignature(hexSignature)
-      
-      // // Notify parent component
-      // if (onSignatureChange) {
-      //   onSignatureChange(hexSignature)
-      // }
 
     } catch (error) {
       console.error("Error signing transaction:", error)
