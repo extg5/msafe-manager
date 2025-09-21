@@ -82,6 +82,36 @@ async function getNextSN(msafeAddress: string): Promise<bigint> {
   }
 }
 
+// Function to get sequence number for regular account
+async function getAccountSequenceNumber(accountAddress: string): Promise<bigint> {
+  try {
+    // Initialize Aptos client for mainnet
+    const aptosConfig = new AptosConfig({ 
+      network: Network.MAINNET, 
+      clientConfig: {
+        API_KEY: 'AG-AKERERDAVJN5NUDRDEIWKYMKTEXO5TY11'
+      }
+    });
+    const aptos = new Aptos(aptosConfig);
+    
+    // Get account information
+    const accountInfo = await aptos.getAccountInfo({
+      accountAddress: accountAddress
+    });
+    
+    // Return sequence number as bigint
+    return BigInt(accountInfo.sequence_number);
+  } catch (error) {
+    console.error("Error getting account sequence number:", error);
+    // If account not found, return 0 (new account)
+    if (error instanceof Error && error.message.includes('Account not found')) {
+      console.warn(`Account not found for address ${accountAddress}, using sequence number 0`);
+      return 0n;
+    }
+    throw new Error(`Failed to get sequence number for account ${accountAddress}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
 interface ProviderCheckerProps {
   onSignatureChange?: (signature: string) => void
 }
@@ -204,7 +234,7 @@ export function ProviderChecker({ onSignatureChange }: ProviderCheckerProps) {
           gasPrice: 100n,
           expirationSec: 30, // 30 seconds
           chainID: 1, // mainnet,
-          sequenceNumber: 29n,
+          sequenceNumber: await getAccountSequenceNumber(account.address.toString())
         }
       );
 
