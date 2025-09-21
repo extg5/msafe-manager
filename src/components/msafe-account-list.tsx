@@ -4,6 +4,9 @@ import { Aptos, AptosConfig, Network, Hex } from "@aptos-labs/ts-sdk"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { extractSigFromSignedTx, toHex } from "@/utils/signature"
+import { makeEntryFunctionTx, makeInitTx, type EntryFunctionArgs, type IMultiSig, type IAccount } from "@/utils/msafe-txn"
+import { WalletConnectors } from "msafe-wallet-adaptor"
+import { BCS, TxnBuilderTypes, HexString } from "aptos"
 
 // Helper function to compare hex strings
 function isHexEqual(hex1: string, hex2: string): boolean {
@@ -467,6 +470,53 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     }
   }, [aptos])
 
+  // Get next sequence number for MSafe account (for MSafe transactions)
+  const getNextSN = useCallback(async (msafeAddress: string): Promise<bigint> => {
+    try {
+      // Build the resource type string for Momentum struct
+      const resourceType = `${MSAFE_MODULES}::momentum_safe::Momentum`;
+      
+      // Get the MSafe resource from the account
+      const resource = await aptos.getAccountResource({
+        accountAddress: msafeAddress,
+        resourceType: resourceType
+      });
+      
+      const momentum = resource as {
+        txn_book: {
+          max_sequence_number: string;
+        }
+      };
+      
+      // Return next sequence number (max + 1)
+      return BigInt(momentum.txn_book.max_sequence_number) + 1n;
+    } catch (error) {
+      console.error("Error getting next sequence number:", error);
+      throw new Error(`Failed to get next sequence number for MSafe account ${msafeAddress}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }, [aptos])
+
+  // Get sequence number for regular account
+  const getAccountSequenceNumber = useCallback(async (accountAddress: string): Promise<bigint> => {
+    try {
+      // Get account information
+      const accountInfo = await aptos.getAccountInfo({
+        accountAddress: accountAddress
+      });
+      
+      // Return sequence number as bigint
+      return BigInt(accountInfo.sequence_number);
+    } catch (error) {
+      console.error("Error getting account sequence number:", error);
+      // If account not found, return 0 (new account)
+      if (error instanceof Error && error.message.includes('Account not found')) {
+        console.warn(`Account not found for address ${accountAddress}, using sequence number 0`);
+        return 0n;
+      }
+      throw new Error(`Failed to get sequence number for account ${accountAddress}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }, [aptos])
+
   // Get withdrawal requests
   const loadWithdrawalRequests = useCallback(async () => {
     if (!selectedAccount) return
@@ -505,7 +555,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     }
   }, [selectedAccount, aptos])
 
-  // Sign and send withdrawal request to MSAFE
+  // Sign and send withdrawal request to MSAFE (rewritten using provider-checker approach)
   const signAndSendWithdrawalRequest = useCallback(async (requestIndex: number) => {
     if (!selectedAccount || !account?.address) return
 
@@ -522,55 +572,34 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     try {
       console.log('Selected account:', selectedAccount)
       
-      // Get sequence number for the MSafe account
-      const sequenceNumber = await getSequenceNumber(selectedAccount.address)
-
-      console.log('Sequence number:', sequenceNumber)
-      
-      // Get request ID from the request (using index for now)
-      const requestId = requestIndex
-      
-      // Get the payload from the request and convert from hex to bytes
-      const rawPayload = request.payload && request.payload !== 'N/A' 
-        ? Hex.fromHexString(request.payload).toUint8Array()
-        : new Uint8Array()
-      
-      // Create transaction payload for signing
-      const payload = {
-        function: `${FK_MSAFE_MODULES}::drain::withdraw`,
-        type_arguments: [],
-        arguments: [requestId]
+      // Create entry function arguments for drain::withdraw
+      const withdrawArgs: EntryFunctionArgs = {
+        fnName: `${FK_MSAFE_MODULES}::drain::withdraw`,
+        typeArgs: [],
+        args: [BCS.bcsSerializeUint64(requestIndex)] // request_id as u64
       }
 
-      // Transaction options
-      const opts = {
-        sender: selectedAccount.address,
-        sequence_number: sequenceNumber,
-        max_gas_amount: 12000,
-        gas_unit_price: 120,
-        expiration_timestamp_secs: Math.floor(Date.now() / 1000) + 604800, // 1 week from now
+      // Create MSafe account interface
+      const msafeAccountInterface: IMultiSig = {
+        address: new HexString(selectedAccount.address),
       }
 
-      // Use Pontem provider for transaction signing (similar to createNewMSafe)
-      const provider = (window as { pontem?: { signTransaction: (payload: unknown, opts: unknown) => Promise<unknown>, signAndSubmit: (payload: unknown, opts: unknown) => Promise<unknown> } }).pontem
-      if (!provider) {
-        throw new Error('Pontem provider not found on window')
-      }
+      // Create MSafe transaction using our utility function
+      const tx = await makeEntryFunctionTx(msafeAccountInterface, withdrawArgs, {
+        maxGas: 100000n,
+        gasPrice: 100n,
+        expirationSec: 600, // 10 minutes
+        chainID: 1, // mainnet
+        sequenceNumber: await getNextSN(selectedAccount.address),
+      })
 
-      // Sign the transaction (no submit) - similar to createNewMSafe
-      const ret = await provider.signTransaction(payload, opts)
-      console.log('Signed transaction:', ret)
-      
-      const signedBytes = ret instanceof Uint8Array ? ret : (ret as { result: Uint8Array }).result
-      if (!signedBytes) throw new Error("Failed to get signed transaction bytes")
+      console.log('MSafe drain::withdraw transaction created:', tx)
 
-      // Extract signature from signed transaction
-
-      const { variant, pubkey, signature } = extractSigFromSignedTx(signedBytes)
-      // console.log("authenticator variant:", variant)
-      // console.log("trx (hex):", toHex(signedBytes))
-      // console.log("pubkey (hex):", toHex(pubkey))
-      console.log("signature (hex):", toHex(signature))
+      // Use WalletConnectors to get signature data (like in provider-checker)
+      const msafeAccount = await WalletConnectors['Pontem']();
+      const [p, s] = await msafeAccount.getSigData(tx.raw);
+      console.log('payload', toHex(p))
+      console.log('signature', s)
 
       // Get MSafe information to find the public key index
       const msafeInfo = await getMSafeInfo(selectedAccount.address)
@@ -589,45 +618,46 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       }
       
       console.log('Found public key index:', pkIndex, 'for public key:', currentAccountPubKey)
-      console.log('MSafe address:', selectedAccount.address)
-      const msafeAddress = selectedAccount.address.slice(2)
-      console.log('MSafe address without 0x:', msafeAddress)
 
-      const trxHex = '0xb5e97db07fa0bd0e5598aa3643a9bc6f6693bddc1a9fec9e674a461eaa00b193' + toHex(signedBytes).slice(0, -128).slice(0,-70)
+      // Create signer account interface for the current user
+      const signerAccount: IAccount = {
+        address: new HexString(account.address.toString()),
+        publicKey: () => {
+          if (!account.publicKey) {
+            throw new Error("Public key not available from wallet");
+          }
+          // Convert the public key string to Ed25519PublicKey
+          const publicKeyBytes = new HexString(account.publicKey.toString()).toUint8Array();
+          return new TxnBuilderTypes.Ed25519PublicKey(publicKeyBytes);
+        }
+      };
 
-      // Now call init_transaction with the signed payload
-      // const response = await signAndSubmitTransaction({
-      //   sender: account.address,
-      //   data: {
-      //     function: `${MSAFE_MODULES}::momentum_safe::init_transaction`,
-      //     functionArguments: [
-      //       selectedAccount.address, // msafe_address
-      //       pkIndex, // pk_index
-      //       trxHex, // payload as vector<u8>
-      //       "0x" + toHex(signature) // signature as vector<u8>
-      //     ]
-      //   }
-      // })
+      // Create the init transaction using our utility function
+      const initTx = await makeInitTx(
+        signerAccount,
+        new HexString(selectedAccount.address),
+        pkIndex,
+        p, // signing message (payload)
+        s, // signature
+        {
+          maxGas: 100000n,
+          gasPrice: 100n,
+          expirationSec: 30, // 30 seconds
+          chainID: 1, // mainnet,
+          sequenceNumber: await getAccountSequenceNumber(account.address.toString())
+        }
+      );
 
-      const payload2 = {
-        function: `${MSAFE_MODULES}::momentum_safe::init_transaction`,
-        type_arguments: [],
-        arguments: [
-          selectedAccount.address, // msafe_address
-          `${pkIndex}`, // pk_index
-          trxHex, // payload as vector<u8>
-          "0x" + toHex(signature) // signature as vector<u8>
-        ]
-      }
-      const opts2 = {
-        sender: account.address,
-        max_gas_amount: 12000,
-        gas_unit_price: 120,
-        expiration_timestamp_secs: Math.floor(Date.now() / 1000) + 604800, // 1 week from now
-      }
-      const response = await provider.signAndSubmit(payload2, opts2)
+      console.log('Init transaction created:', initTx)
 
-      console.log('Transaction submitted successfully:', response)
+      // Sign and submit the init transaction
+      const signedInitTx = await msafeAccount.sign(initTx.raw)
+      console.log('Signed init transaction:', signedInitTx)
+
+      // Submit to blockchain
+      const aptosClient = new (await import('aptos')).AptosClient('https://fullnode.mainnet.aptoslabs.com');
+      const txRes = await aptosClient.submitSignedBCSTransaction(signedInitTx)
+      console.log('Transaction submitted:', txRes)
       
       // Refresh withdrawal requests to see updated status
       await loadWithdrawalRequests()
@@ -642,7 +672,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         return newSet
       })
     }
-  }, [selectedAccount, account, withdrawalRequests, getSequenceNumber, loadWithdrawalRequests, getMSafeInfo])
+  }, [selectedAccount, account, withdrawalRequests, getNextSN, getAccountSequenceNumber, loadWithdrawalRequests, getMSafeInfo])
 
   // Create withdrawal request
   const createWithdrawalRequest = useCallback(async (formData: WithdrawalFormData) => {

@@ -42,6 +42,12 @@ export type APTTransferArgs = {
   amount: bigint;
 };
 
+export type EntryFunctionArgs = {
+  fnName: string;
+  typeArgs: string[];
+  args: BCS.Bytes[]; // encoded bytes
+};
+
 export type Options = {
   maxGas?: bigint;
   gasPrice?: bigint;
@@ -181,7 +187,7 @@ export class AptosEntryTxnBuilder {
     return this;
   }
 
-  async build(sender: IAccount): Promise<Transaction> {
+  async build(sender: IAccount | IMultiSig): Promise<Transaction> {
     if (!this._addr || !this._module || !this._method || !this._fromAddress || !this._config) {
       throw new Error("Missing required parameters for entry function transaction");
     }
@@ -229,6 +235,23 @@ export class MSafeTransaction extends Transaction {
 const DEFAULT_UNIT_PRICE = 1000n;
 const DEFAULT_REGISTER_MAX_GAS = 50000n;
 const DEFAULT_EXPIRATION = 604800; // 1 week in seconds
+
+// Constants for parsing
+const NUM_FUNCTION_COMPS = 3;
+
+// Utility functions
+export function splitFunctionComponents(s: string): [HexString, string, string] {
+  const comps = s.split('::');
+  if (comps.length != NUM_FUNCTION_COMPS) {
+    throw new Error("invalid full function name");
+  }
+  return [HexString.ensure(comps[0]), comps[1], comps[2]];
+}
+
+export function typeTagStructFromName(name: string) {
+  const structTag = TxnBuilderTypes.StructTag.fromString(name);
+  return new TxnBuilderTypes.TypeTagStruct(structTag);
+}
 
 // Helper function to apply default options
 export async function applyDefaultOptions(
@@ -278,6 +301,34 @@ export async function makeMSafeAPTTransferTx(
     .withTxConfig(config)
     .to(args.to)
     .amount(args.amount)
+    .build(sender);
+
+  return new MSafeTransaction(tx.raw);
+}
+
+/**
+ * Creates an MSafe entry function transaction
+ * @param sender - The multi-signature account that will send the transaction
+ * @param args - Entry function arguments containing function name, type args, and encoded args
+ * @param opts - Optional transaction configuration
+ * @returns Promise<MSafeTransaction> - The constructed MSafe transaction
+ */
+export async function makeEntryFunctionTx(
+  sender: IMultiSig,
+  args: EntryFunctionArgs,
+  opts?: Options
+): Promise<MSafeTransaction> {
+  const config = await applyDefaultOptions(sender.address, opts);
+  const [deployer, moduleName, fnName] = splitFunctionComponents(args.fnName);
+  const txBuilder = new AptosEntryTxnBuilder();
+  const tx = await txBuilder
+    .addr(deployer)
+    .module(moduleName)
+    .method(fnName)
+    .from(sender.address)
+    .withTxConfig(config)
+    .typeArgs(args.typeArgs.map((ta) => typeTagStructFromName(ta)))
+    .args(args.args)
     .build(sender);
 
   return new MSafeTransaction(tx.raw);
