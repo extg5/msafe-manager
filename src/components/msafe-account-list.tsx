@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from "react"
 import { useWallet } from "@aptos-labs/wallet-adapter-react"
-import { Aptos, AptosConfig, Network, Hex } from "@aptos-labs/ts-sdk"
+import { Aptos, AptosConfig, Deserializer, Network } from "@aptos-labs/ts-sdk"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { extractSigFromSignedTx, toHex } from "@/utils/signature"
+import { toHex } from "@/utils/signature"
 import { makeEntryFunctionTx, makeInitTx, type EntryFunctionArgs, type IMultiSig, type IAccount } from "@/utils/msafe-txn"
 import { WalletConnectors } from "msafe-wallet-adaptor"
 import { BCS, TxnBuilderTypes, HexString } from "aptos"
@@ -97,6 +97,13 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   const [isCreatingWithdrawal, setIsCreatingWithdrawal] = useState(false)
   const [isLoadingRequests, setIsLoadingRequests] = useState(false)
   const [signingRequests, setSigningRequests] = useState<Set<number>>(new Set())
+  const [coinsRegistry, setCoinsRegistry] = useState<{symbol: string, decimals: number, type: string, faType?: string}[]>([])
+
+  useEffect(() => {
+    fetch('https://raw.githubusercontent.com/pontem-network/coins-registry/refs/heads/main/src/coins.json')
+      .then(response => response.json())
+      .then(data => setCoinsRegistry(data))
+  }, [])
 
   useEffect(() => {
     console.log('Withdrawal requests:', withdrawalRequests)
@@ -116,6 +123,25 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     }
   }), [])
   const aptos = useMemo(() => new Aptos(aptosConfig), [aptosConfig])
+
+    const getTokenData = useCallback((tokenAddress: string | undefined): {symbol: string, decimals: number} | null => { 
+      if (!tokenAddress) return null;
+      if (tokenAddress === '0xa') {
+        return {symbol: 'APT', decimals: 8};
+      }
+      const allBalances = msafeAccounts.flatMap(account => account.balances);
+      const foundFromBalances = allBalances.find(balance => balance.coinType === tokenAddress);
+      if (foundFromBalances) {
+        return {symbol: foundFromBalances.symbol || 'N/A', decimals: foundFromBalances.decimals};
+      }
+      
+      const allTokensData = coinsRegistry;
+      const foundFromTokens = allTokensData.find(token => [token.type, token.faType].filter(Boolean).includes(tokenAddress));
+      if (foundFromTokens) {
+        return {symbol: foundFromTokens.symbol || 'N/A', decimals: foundFromTokens.decimals};
+      }
+      return null;
+    }, [msafeAccounts, coinsRegistry])
 
   // Get MSafe information including owners and public keys
   const getMSafeInfo = useCallback(async (msafeAddress: string): Promise<MSafeInfo | null> => {
@@ -584,6 +610,19 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         address: new HexString(selectedAccount.address),
       }
 
+      // const tx = await aptos.transaction.build.multiAgent({
+      //   sender: selectedAccount.address,
+      //   data: {
+      //     function: `${FK_MSAFE_MODULES}::drain::withdraw`,
+      //     functionArguments: [requestIndex], // request_id as u64
+      //     typeArguments: [],
+      //   },
+      //   secondarySignerAddresses: ['0x84b7946a88d5af188497d2e3bdbdbc9a9a7994a35f540235c22e6f3790da000e', '0xb37bc55dcd713705f9dc1a71a64e99035495998018ac138b0036ab328895dc47'],
+      // })
+
+      // console.log('MultiAgent transaction:', atx)
+
+
       // Create MSafe transaction using our utility function
       const tx = await makeEntryFunctionTx(msafeAccountInterface, withdrawArgs, {
         maxGas: 100000n,
@@ -593,7 +632,10 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         sequenceNumber: await getNextSN(selectedAccount.address),
       })
 
-      console.log('MSafe drain::withdraw transaction created:', tx)
+      // console.log('MSafe drain::withdraw transaction created:', tx)
+
+      // const deserializer = new Deserializer(tx.bcsToBytes());
+      // const rawTransaction = TxnBuilderTypes.RawTransaction.deserialize(deserializer)
 
       // Use WalletConnectors to get signature data (like in provider-checker)
       const msafeAccount = await WalletConnectors['Pontem']();
@@ -632,6 +674,15 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         }
       };
 
+      console.log('All data:', {
+        signerAccount,
+        msafeAccount,
+        pkIndex,
+        p,
+        s,
+        sequenceNumber: await getAccountSequenceNumber(account.address.toString())
+      })
+
       // Create the init transaction using our utility function
       const initTx = await makeInitTx(
         signerAccount,
@@ -644,7 +695,9 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
           gasPrice: 100n,
           expirationSec: 30, // 30 seconds
           chainID: 1, // mainnet,
-          sequenceNumber: await getAccountSequenceNumber(account.address.toString())
+          sequenceNumber: await getAccountSequenceNumber(account.address.toString()),
+          estimateGasPrice: true,
+          estimateMaxGas: true
         }
       );
 
@@ -658,6 +711,10 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       const aptosClient = new (await import('aptos')).AptosClient('https://fullnode.mainnet.aptoslabs.com');
       const txRes = await aptosClient.submitSignedBCSTransaction(signedInitTx)
       console.log('Transaction submitted:', txRes)
+      const committedTx = await aptos.transaction.waitForTransaction({
+        transactionHash: txRes.hash
+      })
+      console.log('Committed transaction:', committedTx)
       
       // Refresh withdrawal requests to see updated status
       await loadWithdrawalRequests()
@@ -672,7 +729,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         return newSet
       })
     }
-  }, [selectedAccount, account, withdrawalRequests, getNextSN, getAccountSequenceNumber, loadWithdrawalRequests, getMSafeInfo])
+  }, [selectedAccount, account, withdrawalRequests, getNextSN, getAccountSequenceNumber, loadWithdrawalRequests, getMSafeInfo, aptos.transaction])
 
   // Create withdrawal request
   const createWithdrawalRequest = useCallback(async (formData: WithdrawalFormData) => {
@@ -692,12 +749,15 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       }
 
       // Extract metadata address from coinType
-      let metadataAddr = '0xa' // Default for APT
+      let metadataAddr = formData.selectedToken // Default for APT
       if (formData.selectedToken === '0x1::aptos_coin::AptosCoin') {
         metadataAddr = '0xa'
       } else if (formData.selectedToken.includes('::')) {
         metadataAddr = formData.selectedToken.split('::')[0]
       }
+
+      console.log('formData', formData)
+      console.log('metadataAddr:', metadataAddr)
 
       // Convert amount to raw units
       const amountInRawUnits = Math.floor(parseFloat(formData.amount) * Math.pow(10, selectedTokenBalance.decimals))
@@ -717,6 +777,11 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         }
       })
 
+      const committedTx = await aptos.transaction.waitForTransaction({
+        transactionHash: response.hash
+      })
+      console.log('Committed transaction:', committedTx)
+
       console.log('Withdrawal request created:', response)
       
       // Reset form
@@ -734,7 +799,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     } finally {
       setIsCreatingWithdrawal(false)
     }
-  }, [selectedAccount, account, getSequenceNumber, loadWithdrawalRequests, signAndSubmitTransaction])
+  }, [selectedAccount, account, getSequenceNumber, loadWithdrawalRequests, signAndSubmitTransaction, aptos.transaction])
 
   // Load balances for selected account
   const loadAccountBalances = useCallback(async (account: MSafeAccount) => {
@@ -975,7 +1040,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                           </div>
                           {isWithdrawable && (
                             <div className="text-xs text-green-600 dark:text-green-400">
-                              Available: {availableAmount.toFixed(balance.decimals)}
+                              Allowed for withdrawal: {availableAmount.toFixed(balance.decimals)}
                             </div>
                           )}
                         </div>
@@ -1003,13 +1068,14 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                       {selectedAccount.balances
                         .filter(balance => parseFloat(balance.availableForWithdrawal || '0') > 0)
                         .map((balance, index) => {
+                          const totalAmount = parseFloat(balance.amount) / Math.pow(10, balance.decimals)
                           const availableAmount = parseFloat(balance.availableForWithdrawal || '0') / Math.pow(10, balance.decimals)
                           return (
                             <SelectItem key={index} value={balance.coinType}>
                               <div className="flex items-center justify-between w-full">
                                 <span>{balance.symbol}</span>
                                 <span className="text-xs text-muted-foreground ml-2">
-                                  Available: {availableAmount.toFixed(balance.decimals)}
+                                  Balance: {totalAmount.toFixed(balance.decimals)}. Allowed for withdrawal: {availableAmount.toFixed(balance.decimals)}.
                                 </span>
                               </div>
                             </SelectItem>
@@ -1087,6 +1153,9 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                   {withdrawalRequests.map((request, index) => {
                     const isSigning = signingRequests.has(index)
                     const hasPayload = request.payload && request.payload !== 'N/A'
+                    const token = request.fa_metadata?.inner;
+                    const tokenData = getTokenData(token);
+                    const amount = request.amount ? parseFloat(request.amount) / Math.pow(10, tokenData?.decimals || 8) : 0;
                     
                     return (
                       <div key={index} className="p-3 border rounded-lg">
@@ -1109,10 +1178,11 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                           )}
                         </div>
                         <div className="space-y-1 text-xs text-muted-foreground">
-                          <div>Amount: {request.amount || 'N/A'}</div>
-                          <div>Receiver: {request.receiver || 'N/A'}</div>
-                          <div>Metadata: {request.fa_metadata?.inner || 'N/A'}</div>
-                          <div className="break-all">Payload: {request.payload || 'N/A'}</div>
+                          <div><b>Amount:</b> {amount.toFixed(tokenData?.decimals || 8)} {tokenData?.symbol}</div>
+                          <div><b>Token:</b> {tokenData?.symbol || 'N/A'}</div>
+                          <div><b>Receiver:</b> {request.receiver || 'N/A'}</div>
+                          <div><b>Metadata:</b> {request.fa_metadata?.inner || 'N/A'}</div>
+                          <div className="break-all"><b>Payload:</b> {request.payload || 'N/A'}</div>
                         </div>
                       </div>
                     )
