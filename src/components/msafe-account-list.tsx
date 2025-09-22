@@ -1355,7 +1355,6 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                 requestId,
                                 argsCount: args.args.length,
                                 sender: pending.sender.hex(),
-                                isSigned: pending.isSigned
                               }
                               msafeTransactions.push(pending)
                             }
@@ -1408,11 +1407,10 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                               {pendingTxInfo.requestId}
                               {msafeTransactions.map(tx => tx.sn).join(', ')}
                               <b className="text-yellow-600 dark:text-yellow-400">Pending Transaction:</b> Request ID {pendingTxInfo.requestId} ({pendingTxInfo.argsCount} args)
-                              {pendingTxInfo.isSigned && <p className="text-green-600 dark:text-green-400">Already signed</p>}
-                              {!pendingTxInfo.isSigned && (
+                              {!!msafeTransactions.length && (
                                 <div className="flex flex-col items-center gap-2">
                                   {msafeTransactions.map(tx => (
-                                    <LoadingButton loading={isSigning} size="sm" onClick={() => signAndSendWithdrawalRequest(index, tx)}>Sign Existing TX & Send for SN {tx.sn}</LoadingButton>
+                                    <LoadingButton loading={isSigning} size="sm" onClick={() => signAndSendWithdrawalRequest(index, tx)} disabled={tx.isSigned}>{tx.isSigned ? `Signed & Sent for SN ${tx.sn}` : `Sign Existing TX & Send for SN ${tx.sn}`}</LoadingButton>
                                   ))}
                                 </div>
                               )}
