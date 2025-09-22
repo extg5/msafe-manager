@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from "react"
 import { useWallet } from "@aptos-labs/wallet-adapter-react"
-import { Aptos, AptosConfig, Deserializer, Ed25519PublicKey, Ed25519Signature, Network } from "@aptos-labs/ts-sdk"
+import { Aptos, AptosConfig, Deserializer, Ed25519PublicKey, Ed25519Signature, Network, RawTransaction } from "@aptos-labs/ts-sdk"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { computeMultiSigAddress, toHex } from "@/utils/signature"
-import { makeEntryFunctionTx, makeInitTx, type EntryFunctionArgs, type IMultiSig, type IAccount, assembleMultiSig, assembleMultiSigTxn } from "@/utils/msafe-txn"
+import { makeEntryFunctionTx, makeInitTx, type EntryFunctionArgs, type IMultiSig, type IAccount, assembleMultiSig, assembleMultiSigTxn, makeSubmitSignatureTxn } from "@/utils/msafe-txn"
 import { WalletConnectors } from "msafe-wallet-adaptor"
 import { BCS, TxnBuilderTypes, HexString } from "aptos"
 
@@ -716,7 +716,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       console.log('Selected account:', selectedAccount)
       
       // Create entry function arguments for drain::withdraw
-      const withdrawArgs: EntryFunctionArgs = msafeTransaction ? msafeTransaction.args as EntryFunctionArgs : {
+      const withdrawArgs: EntryFunctionArgs = {
         fnName: `${FK_MSAFE_MODULES}::drain::withdraw`,
         typeArgs: [],
         args: [BCS.bcsSerializeUint64(requestIndex)] // request_id as u64
@@ -729,8 +729,8 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
 
       // Create MSafe transaction using our utility function
       const tx = await makeEntryFunctionTx(msafeAccountInterface, withdrawArgs, {
-        maxGas: msafeTransaction ? msafeTransaction.maxGas : 100000n,
-        gasPrice: msafeTransaction ? msafeTransaction.gasPrice : 100n,
+        maxGas: 100000n,
+        gasPrice: 100n,
         expirationSec: 604800, // 1 week
         chainID: 1, // mainnet
         sequenceNumber: await getNextSN(selectedAccount.address),
@@ -740,10 +740,21 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
 
       // const deserializer = new Deserializer(tx.bcsToBytes());
       // const rawTransaction = TxnBuilderTypes.RawTransaction.deserialize(deserializer)
+      let dataToSign = tx.raw
+      if (msafeTransaction) {
+        const serializer = new BCS.Serializer();
+        msafeTransaction.payload?.serialize(serializer)
+
+        const deserializer = new Deserializer(serializer.getBytes());
+
+        // @ts-expect-error aptos-ts-sdk is not updated
+        const rawTransaction = TxnBuilderTypes.RawTransaction.deserialize(deserializer)
+        dataToSign = rawTransaction
+      }
 
       // Use WalletConnectors to get signature data (like in provider-checker)
       const msafeAccount = await WalletConnectors['Pontem']();
-      const [p, s] = await msafeAccount.getSigData(tx.raw);
+      const [p, s] = await msafeAccount.getSigData(dataToSign);
       console.log('payload', toHex(p))
       console.log('signature', s)
 
@@ -779,38 +790,57 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       };
 
       if (msafeTransaction && msafeTransaction.signatures) {
-        console.log('msafeTransaction:', msafeTransaction)
-        console.log('msafeInfo:', msafeInfo)
-        console.log('currentAccountPubKey:', currentAccountPubKey)
-        console.log('s:', s)
-        const multiSignature = assembleMultiSig(
-          msafeInfo.public_keys,
-          msafeTransaction.signatures,
-          currentAccountPubKey,
-          s
-        );
-        console.log('MultiSignature:', multiSignature)
-        console.log('p:', p)
-        console.log('msafeInfo.public_keys:', msafeInfo.public_keys)
-        const [pk] = computeMultiSigAddress(
-          msafeInfo.public_keys,
-          msafeInfo.threshold,
-          BigInt(msafeInfo.nonce)
-        );
+        // console.log('msafeTransaction:', msafeTransaction)
+        // console.log('msafeInfo:', msafeInfo)
+        // console.log('currentAccountPubKey:', currentAccountPubKey)
+        // console.log('s:', s)
+        // const multiSignature = assembleMultiSig(
+        //   msafeInfo.public_keys,
+        //   msafeTransaction.signatures,
+        //   currentAccountPubKey,
+        //   s
+        // );
+        // console.log('MultiSignature:', multiSignature)
+        // console.log('p:', p)
+        // console.log('msafeInfo.public_keys:', msafeInfo.public_keys)
+        // const [pk] = computeMultiSigAddress(
+        //   msafeInfo.public_keys,
+        //   msafeInfo.threshold,
+        //   BigInt(msafeInfo.nonce)
+        // );
 
-        const bcsTxn = assembleMultiSigTxn(
-          p,
-          pk,
-          multiSignature,
-          account.address.toString()
-        );
+        // const bcsTxn = assembleMultiSigTxn(
+        //   p,
+        //   pk,
+        //   multiSignature,
+        //   account.address.toString()
+        // );
 
-        console.log('MultiSignature:', multiSignature)
-        console.log('BCS Transaction:', bcsTxn)
+        // console.log('MultiSignature:', multiSignature)
+        // console.log('BCS Transaction:', bcsTxn)
+
+        const submitSignatureTx = await makeSubmitSignatureTxn(
+          signerAccount,
+          msafeTransaction.hash.hex(),
+          pkIndex,
+          new HexString(selectedAccount.address),
+          s,
+          {
+            maxGas: 100000n,
+            gasPrice: 100n,
+            expirationSec: 30, // 30 seconds
+            chainID: 1, // mainnet,
+            sequenceNumber: await getAccountSequenceNumber(account.address.toString()),
+            estimateGasPrice: true,
+            estimateMaxGas: true
+          }
+        )
+
+        const signedTx = await msafeAccount.sign(submitSignatureTx.raw)
 
         // Submit to blockchain
         const aptosClient = new (await import('aptos')).AptosClient('https://fullnode.mainnet.aptoslabs.com');
-        const txRes = await aptosClient.submitSignedBCSTransaction(bcsTxn)
+        const txRes = await aptosClient.submitSignedBCSTransaction(signedTx)
         console.log('Transaction submitted:', txRes)
         const committedTx = await aptos.transaction.waitForTransaction({
           transactionHash: txRes.hash

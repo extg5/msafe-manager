@@ -284,7 +284,7 @@ export class SignedMessage<T extends Serializable> {
     numSigs?: number;
     isSigned?: boolean;
     signatures?: SimpleMap<TEd25519PublicKey, TEd25519Signature>;
-    payload?: TxnBuilderTypes.TransactionPayload;
+    payload?: TxnBuilderTypes.RawTransaction;
   };
 
   export type Element<K, V> = {
@@ -394,7 +394,7 @@ function decodeTypeTag(tArg: TxnBuilderTypes.TypeTag): string {
 }
 
  export class MSafeTransaction extends Transaction {
-  payload: TxnBuilderTypes.TransactionPayload;
+  payload: TxnBuilderTypes.RawTransaction;
 
   constructor(raw: TxnBuilderTypes.RawTransaction) {
     super(raw);
@@ -407,7 +407,7 @@ function decodeTypeTag(tArg: TxnBuilderTypes.TypeTag): string {
     ) {
       throw new Error("unknown transaction payload type");
     }
-    this.payload = raw.payload;
+    this.payload = raw;
   }
 
   static deserialize(rawTx: Buffer): MSafeTransaction {
@@ -437,7 +437,7 @@ function decodeTypeTag(tArg: TxnBuilderTypes.TypeTag): string {
 
   private getArgs() {
     const payload = this
-      .payload as TxnBuilderTypes.TransactionPayloadEntryFunction;
+      .payload.payload as TxnBuilderTypes.TransactionPayloadEntryFunction;
     try {
         const [addr, moduleName, fnName] = getModuleComponents(payload);
         const tArgs = decodeTypeArgs(payload);

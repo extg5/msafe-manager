@@ -338,6 +338,32 @@ export async function makeEntryFunctionTx(
   return new MSafeTransaction(tx.raw);
 }
 
+export async function makeSubmitSignatureTxn(
+  signer: IAccount,
+  txHash: string,
+  pkIndex: number,
+  msafeAddress: HexString,
+  sig: TxnBuilderTypes.Ed25519Signature,
+  opts: Options
+) {
+  const txBuilder = new AptosEntryTxnBuilder();
+  const config = await applyDefaultOptions(signer.address, opts);
+
+  return txBuilder
+    .addr(MSAFE_MODULES_ACCOUNT)
+    .module(MODULES.MOMENTUM_SAFE)
+    .method(FUNCTIONS.MSAFE_SUBMIT_SIGNATURE)
+    .from(signer.address)
+    .withTxConfig(config)
+    .args([
+      BCS.bcsToBytes(TxnBuilderTypes.AccountAddress.fromHex(msafeAddress)),
+      BCS.bcsSerializeU8(pkIndex),
+      BCS.bcsSerializeBytes(HexBuffer(txHash)),
+      BCS.bcsToBytes(sig),
+    ])
+    .build(signer);
+}
+
 /**
  * Creates an MSafe init_transaction transaction
  * @param signer - The account that will sign and submit the init transaction
