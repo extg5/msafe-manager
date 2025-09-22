@@ -627,7 +627,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       const tx = await makeEntryFunctionTx(msafeAccountInterface, withdrawArgs, {
         maxGas: 100000n,
         gasPrice: 100n,
-        expirationSec: 600, // 10 minutes
+        expirationSec: 604800, // 1 week
         chainID: 1, // mainnet
         sequenceNumber: await getNextSN(selectedAccount.address),
       })
