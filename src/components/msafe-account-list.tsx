@@ -1,15 +1,16 @@
 import { useState, useEffect, useCallback, useMemo } from "react"
 import { useWallet } from "@aptos-labs/wallet-adapter-react"
-import { Aptos, AptosConfig, Deserializer, Network } from "@aptos-labs/ts-sdk"
+import { Aptos, AptosConfig, Deserializer, Ed25519PublicKey, Ed25519Signature, Network } from "@aptos-labs/ts-sdk"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { toHex } from "@/utils/signature"
-import { makeEntryFunctionTx, makeInitTx, type EntryFunctionArgs, type IMultiSig, type IAccount } from "@/utils/msafe-txn"
+import { computeMultiSigAddress, toHex } from "@/utils/signature"
+import { makeEntryFunctionTx, makeInitTx, type EntryFunctionArgs, type IMultiSig, type IAccount, assembleMultiSig, assembleMultiSigTxn } from "@/utils/msafe-txn"
 import { WalletConnectors } from "msafe-wallet-adaptor"
 import { BCS, TxnBuilderTypes, HexString } from "aptos"
 
 // Helper function to compare hex strings
-function isHexEqual(hex1: string, hex2: string): boolean {
+// eslint-disable-next-line react-refresh/only-export-components
+export function isHexEqual(hex1: string, hex2: string): boolean {
   return hex1.toLowerCase() === hex2.toLowerCase()
 }
 
@@ -20,12 +21,34 @@ interface MSafeInfo {
   threshold: number
   nonce: string
   metadata: string
+  txn_book: {
+    max_sequence_number: string
+    min_sequence_number: string
+    tx_hashes: {
+      inner: {
+        handle: string
+      }
+      length: string
+    }
+    pendings: {
+      inner: {
+        handle: string
+      }
+      length: string
+    }
+  }
 }
+export type TransactionType = {
+  payload: HexString;
+  metadata: HexString; // json or uri
+  signatures: SimpleMap<TEd25519PublicKey, TEd25519Signature>; // public_key => signature
+};
 import { LoadingButton } from "@/components/ui/loading-button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { List, Wallet, Coins, Send, AlertCircle } from "lucide-react"
+import { HexBuffer, MigrationProofMessage, MSafeTransaction, toMigrateTx, Transaction, TypeMessage, type MSafeTxnInfo, type SimpleMap, type TEd25519PublicKey, type TEd25519Signature } from "@/utils/transaction"
 
 // MSafe deployer address for Mainnet
 const MSAFE_MODULES = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
@@ -34,7 +57,7 @@ const FK_MSAFE_MODULES = "0x55167d22d3a34525631b1eca1cb953c26b8f349021496bba874e
 
 interface RegistryData {
   publicKey: string
-  pendings: string[]
+  pendings: MSafeTxnInfo[]
   msafes: string[]
 }
 
@@ -159,6 +182,22 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
             threshold: number
             nonce: string
             metadata: string
+          },
+          txn_book: {
+            max_sequence_number: string
+            min_sequence_number: string
+            tx_hashes: {
+              inner: {
+                handle: string
+              }
+              length: string
+            }
+            pendings: {
+              inner: {
+                handle: string
+              }
+              length: string
+            }
           }
         }
         
@@ -167,7 +206,8 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
           public_keys: msafeData.info.public_keys,
           threshold: msafeData.info.threshold,
           nonce: msafeData.info.nonce,
-          metadata: msafeData.info.metadata
+          metadata: msafeData.info.metadata,
+          txn_book: msafeData.txn_book
         }
       }
       return null
@@ -176,6 +216,65 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       return null
     }
   }, [aptos])
+
+  // useEffect(() => {
+
+  //   const check = async () => {
+  //     if (!selectedAccount?.address) return
+  //     const msafeData = await getMSafeInfo(selectedAccount?.address)
+  //     if(!msafeData?.txn_book.pendings.length) return;
+
+  //     const pendings = msafeData?.txn_book.pendings;
+
+  //   }
+
+  //   void check();
+
+  // }, [])
+
+  console.log('registryData', registryData)
+
+  const  queryPendingTxHashBySN = async (
+    momentum: MSafeInfo,
+    sn: bigint
+  ): Promise<string[]> => {
+    return aptos.getTableItem({
+      handle:momentum.txn_book.tx_hashes.inner.handle,
+      data: {
+        key_type: "u64",  
+        value_type: "vector<vector<u8>>",
+        key: sn.toString(),
+      }
+    });
+  }
+
+  const queryPendingTxByHash = async (
+    momentum: MSafeInfo,
+    txID: string | HexString
+  ): Promise<TransactionType> => {
+    return aptos.getTableItem({
+      handle: momentum.txn_book.pendings.inner.handle,
+      data: {
+        key_type: "vector<u8>",
+        value_type: `${MSAFE_MODULES}::momentum_safe::Transaction`,
+        key: txID.toString(),
+      }
+    });
+  }
+
+  function isTxValid(txType: TransactionType, curSN: bigint): boolean {
+    const payload = HexBuffer(txType.payload);
+    if (TypeMessage.isTypeMessage(payload)) {
+      return (
+        TypeMessage.deserialize(payload).raw.inner.sequence_number >= curSN
+      );
+    }
+    const tx = Transaction.deserialize(HexBuffer(txType.payload));
+    return (
+      tx.raw.sequence_number >= curSN &&
+      tx.raw.expiration_timestamp_secs >= new Date().getUTCSeconds()
+    );
+  }
 
   // Check registration status and fetch MSafe accounts
   const checkRegistration = useCallback(async () => {
@@ -213,7 +312,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         
         const publicKey = ownedMSafes.public_key
         const msafes: string[] = []
-        const pendings: string[] = []
+        const pendings: MSafeTxnInfo[] = []
         
         // Process active MSAFEs
         if (ownedMSafes.msafes && ownedMSafes.msafes.data) {
@@ -237,26 +336,43 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
             }
           }
         }
-        
+        console.log('ownedMSafes', ownedMSafes)
         // Process pending MSAFEs
-        if (ownedMSafes.pendings && ownedMSafes.pendings.data) {
-          const pendingsLength = Number(ownedMSafes.pendings.data.length)
-          
-          for (let i = 0; i < pendingsLength; i++) {
-            try {
-              const pendingItem = await aptos.getTableItem({
-                handle: ownedMSafes.pendings.data.inner.handle,
-                data: {
-                  key_type: 'u64',
-                  value_type: `${MSAFE_MODULES}::table_map::Element<address, bool>`,
-                  key: i.toString()
-                }
-              })
-              if (pendingItem && (pendingItem as { key: string }).key) {
-                pendings.push((pendingItem as { key: string }).key)
-              }
-            } catch (e) {
-              console.warn(`Failed to get pending MSAFE at index ${i}:`, e)
+        if (msafes.length > 0) {
+          for (const msafe of msafes) {
+            const msafeData = (await aptos.getAccountResource({
+              accountAddress: msafe,
+              resourceType: `${MSAFE_MODULES}::momentum_safe::Momentum`
+            })) as MSafeInfo
+            console.log('msafeData', msafeData)
+            if (Number(msafeData.txn_book.tx_hashes.length) <= 0) continue;
+            const { sequence_number: sn_str } = await aptos.account.getAccountInfo({accountAddress: msafe});
+            const sn = BigInt(sn_str);
+            for (
+              let nonce = sn;
+              nonce <= BigInt(msafeData.txn_book.max_sequence_number);
+              nonce++
+            ) {
+              const nonce_hashes = await queryPendingTxHashBySN(
+                msafeData,
+                nonce
+              );
+              const txs = await Promise.all(
+                nonce_hashes.map((hash) =>
+                  queryPendingTxByHash(msafeData, hash)
+                )
+              );
+              txs
+                .filter((tx) => isTxValid(tx, sn))
+                .forEach((tx) => {
+                  const payload = HexBuffer(tx.payload);
+                  if (MigrationProofMessage.isMigrationProofMessage(payload)) {
+                    pendings.push(toMigrateTx(tx));
+                  } else {
+                    const msafeTx = MSafeTransaction.deserialize(payload);
+                    pendings.push(msafeTx.getTxnInfo(tx.signatures, account.publicKey?.toString() || ''));
+                  }
+                });
             }
           }
         }
@@ -582,7 +698,8 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   }, [selectedAccount, aptos])
 
   // Sign and send withdrawal request to MSAFE (rewritten using provider-checker approach)
-  const signAndSendWithdrawalRequest = useCallback(async (requestIndex: number) => {
+  const signAndSendWithdrawalRequest = useCallback(async (requestIndex: number, msafeTransaction?: MSafeTxnInfo | null) => {
+    console.log('msafeTransaction:', msafeTransaction)
     if (!selectedAccount || !account?.address) return
 
     const request = withdrawalRequests[requestIndex]
@@ -599,7 +716,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       console.log('Selected account:', selectedAccount)
       
       // Create entry function arguments for drain::withdraw
-      const withdrawArgs: EntryFunctionArgs = {
+      const withdrawArgs: EntryFunctionArgs = msafeTransaction ? msafeTransaction.args as EntryFunctionArgs : {
         fnName: `${FK_MSAFE_MODULES}::drain::withdraw`,
         typeArgs: [],
         args: [BCS.bcsSerializeUint64(requestIndex)] // request_id as u64
@@ -610,23 +727,10 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         address: new HexString(selectedAccount.address),
       }
 
-      // const tx = await aptos.transaction.build.multiAgent({
-      //   sender: selectedAccount.address,
-      //   data: {
-      //     function: `${FK_MSAFE_MODULES}::drain::withdraw`,
-      //     functionArguments: [requestIndex], // request_id as u64
-      //     typeArguments: [],
-      //   },
-      //   secondarySignerAddresses: ['0x84b7946a88d5af188497d2e3bdbdbc9a9a7994a35f540235c22e6f3790da000e', '0xb37bc55dcd713705f9dc1a71a64e99035495998018ac138b0036ab328895dc47'],
-      // })
-
-      // console.log('MultiAgent transaction:', atx)
-
-
       // Create MSafe transaction using our utility function
       const tx = await makeEntryFunctionTx(msafeAccountInterface, withdrawArgs, {
-        maxGas: 100000n,
-        gasPrice: 100n,
+        maxGas: msafeTransaction ? msafeTransaction.maxGas : 100000n,
+        gasPrice: msafeTransaction ? msafeTransaction.gasPrice : 100n,
         expirationSec: 604800, // 1 week
         chainID: 1, // mainnet
         sequenceNumber: await getNextSN(selectedAccount.address),
@@ -674,14 +778,49 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         }
       };
 
-      console.log('All data:', {
-        signerAccount,
-        msafeAccount,
-        pkIndex,
-        p,
-        s,
-        sequenceNumber: await getAccountSequenceNumber(account.address.toString())
-      })
+      if (msafeTransaction && msafeTransaction.signatures) {
+        console.log('msafeTransaction:', msafeTransaction)
+        console.log('msafeInfo:', msafeInfo)
+        console.log('currentAccountPubKey:', currentAccountPubKey)
+        console.log('s:', s)
+        const multiSignature = assembleMultiSig(
+          msafeInfo.public_keys,
+          msafeTransaction.signatures,
+          currentAccountPubKey,
+          s
+        );
+        console.log('MultiSignature:', multiSignature)
+        console.log('p:', p)
+        console.log('msafeInfo.public_keys:', msafeInfo.public_keys)
+        const [pk] = computeMultiSigAddress(
+          msafeInfo.public_keys,
+          msafeInfo.threshold,
+          BigInt(msafeInfo.nonce)
+        );
+
+        const bcsTxn = assembleMultiSigTxn(
+          p,
+          pk,
+          multiSignature,
+          account.address.toString()
+        );
+
+        console.log('MultiSignature:', multiSignature)
+        console.log('BCS Transaction:', bcsTxn)
+
+        // Submit to blockchain
+        const aptosClient = new (await import('aptos')).AptosClient('https://fullnode.mainnet.aptoslabs.com');
+        const txRes = await aptosClient.submitSignedBCSTransaction(bcsTxn)
+        console.log('Transaction submitted:', txRes)
+        const committedTx = await aptos.transaction.waitForTransaction({
+          transactionHash: txRes.hash
+        })
+        console.log('Committed transaction:', committedTx)
+        
+        // Refresh withdrawal requests to see updated status
+        await loadWithdrawalRequests()
+        return;
+      }
 
       // Create the init transaction using our utility function
       const initTx = await makeInitTx(
@@ -1157,15 +1296,66 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                     const tokenData = getTokenData(token);
                     const amount = request.amount ? parseFloat(request.amount) / Math.pow(10, tokenData?.decimals || 8) : 0;
                     
+                    // Check if there's a pending transaction for this request
+                    let hasPendingTx = false
+                    let pendingTxInfo = null
+                    const msafeTransactions: MSafeTxnInfo[] = []
+                    if (registryData && registryData.pendings.length > 0) {
+                      for (const pending of registryData.pendings.reverse()) {
+                        const args = pending.args as EntryFunctionArgs
+                        if (args && args.args.length > 0 && args.args[0]) {
+                          try {
+                            // Convert args[0] buffer to number
+                            const buffer = args.args[0]
+                            let requestId = 'N/A'
+                            if (typeof buffer === 'string') {
+                              requestId = buffer
+                            } else if (buffer instanceof Uint8Array || Array.isArray(buffer)) {
+                              const bytes = new Uint8Array(buffer)
+                              let num = 0
+                              for (let i = 0; i < bytes.length; i++) {
+                                num += bytes[i] * Math.pow(256, i)
+                              }
+                              requestId = num.toString()
+                            }
+
+                            if (requestId === index.toString()) {
+                              hasPendingTx = true
+                              pendingTxInfo = {
+                                requestId,
+                                argsCount: args.args.length,
+                                sender: pending.sender.hex(),
+                                isSigned: pending.isSigned
+                              }
+                              msafeTransactions.push(pending)
+                            }
+                          } catch (error) {
+                            console.warn('Failed to convert buffer to number:', error)
+                          }
+                        }
+                      }
+                    }
+                    
                     return (
                       <div key={index} className="p-3 border rounded-lg">
+                        {index}
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
                             <AlertCircle className="h-4 w-4 text-yellow-500" />
                             <span className="text-sm font-medium">
                               Status: {request.status?.__variant__ || 'Unknown'}
+                              {hasPendingTx && (
+                                <span className="ml-2 px-2 py-1 bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200 text-xs rounded">
+                                  Pending TX
+                                </span>
+                              )}
                             </span>
                           </div>
+                          {msafeTransactions.length > 0 && (
+                            <div className="text-xs text-muted-foreground">
+                              <b>Sequence Number:</b> {msafeTransactions.map(tx => tx.sn).join(', ')}
+                            </div>
+                          )}
                           {hasPayload && (
                             <LoadingButton
                               size="sm"
@@ -1183,6 +1373,21 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                           <div><b>Receiver:</b> {request.receiver || 'N/A'}</div>
                           <div><b>Metadata:</b> {request.fa_metadata?.inner || 'N/A'}</div>
                           <div className="break-all"><b>Payload:</b> {request.payload || 'N/A'}</div>
+                          {hasPendingTx && pendingTxInfo && (
+                            <div className="flex flex-col items-center gap-2">
+                              {pendingTxInfo.requestId}
+                              {msafeTransactions.map(tx => tx.sn).join(', ')}
+                              <b className="text-yellow-600 dark:text-yellow-400">Pending Transaction:</b> Request ID {pendingTxInfo.requestId} ({pendingTxInfo.argsCount} args)
+                              {pendingTxInfo.isSigned && <p className="text-green-600 dark:text-green-400">Already signed</p>}
+                              {!pendingTxInfo.isSigned && (
+                                <div className="flex flex-col items-center gap-2">
+                                  {msafeTransactions.map(tx => (
+                                    <LoadingButton loading={isSigning} size="sm" onClick={() => signAndSendWithdrawalRequest(index, tx)}>Sign Existing TX & Send for SN {tx.sn}</LoadingButton>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     )

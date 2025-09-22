@@ -1,4 +1,8 @@
-import { HexString, TxnBuilderTypes, TransactionBuilder, BCS } from "aptos";
+import { HexString, TxnBuilderTypes, BCS } from "aptos";
+import { HexBuffer, Transaction as MTransaction, type TEd25519Signature, type SimpleMap, type TEd25519PublicKey } from "./transaction";
+import type { Account } from "node_modules/@aptos-labs/ts-sdk/dist/esm/api/account.d.mts";
+import { isHexEqual } from "@/components/msafe-account-list";
+import type { AccountAddress } from "@aptos-labs/ts-sdk";
 
 // MSafe constants from CLI-MSafe
 export const MSAFE_MODULES_ACCOUNT = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e";
@@ -368,4 +372,123 @@ export async function makeInitTx(
       BCS.bcsToBytes(signature),
     ])
     .build(signer);
+}
+
+type SigAdded = {
+  pubKey: HexString,
+}
+
+export class MultiSigHelper {
+  /**
+   * MultiSigHelper is the helper for multi-sig aggregation, query, and update
+    */
+
+  private pks: string[]; // pks might be updated in future implementation
+  private sigs: Map<string, TxnBuilderTypes.Ed25519Signature>;
+
+  constructor(pks: string[], sigs?: SimpleMap<TEd25519PublicKey, TEd25519Signature>) {
+    this.pks = pks;
+    this.sigs = simpleMapToSigMap(sigs);
+  }
+
+  findIndex(target: string): number {
+    const i = this.pks.findIndex(pk => {
+      return isHexEqual(pk, target);
+    });
+    if (i === -1) {
+      throw new Error('target public key not found');
+    }
+    return i;
+  }
+
+  isSigSubmitted(pk: string): boolean {
+    return this.sigs.has(pk);
+  }
+
+  numSigs(): number {
+    return this.sigs.size;
+  }
+
+  updateSigs(newSigs: SimpleMap<TEd25519PublicKey, TEd25519Signature>): SigAdded[] {
+    const addedSigs: SigAdded[] = [];
+    newSigs.data.forEach(entry => {
+      const pk = HexString.ensure(entry.key);
+      if (!this.isSigSubmitted(pk.hex())) {
+        addedSigs.push({ pubKey: pk });
+      }
+    });
+    this.sigs = simpleMapToSigMap(newSigs);
+    return addedSigs;
+  }
+
+  addSig(pk: string, sig: TxnBuilderTypes.Ed25519Signature) {
+    this.sigs.set(pk, sig);
+  }
+
+  assembleSignatures() {
+    // construct bitmap and prepare the signature for sorting
+    const bitmap: number[] = [];
+    const sigsUnsorted: [number, TxnBuilderTypes.Ed25519Signature][] = [];
+    this.sigs.forEach((value, key) => {
+      const pkIndex = this.findIndex(key);
+      bitmap.push(pkIndex);
+      sigsUnsorted.push([pkIndex, value]);
+    });
+    console.log('bitmap:', bitmap)
+    // Signature need to be sorted with respect to the pkIndex
+    const sigSorted = sigsUnsorted
+      .sort((a, b) => a[0] - b[0])
+      .map(v => v[1]);
+
+    const parsedBitmap = TxnBuilderTypes.MultiEd25519Signature.createBitmap(bitmap);
+    return new TxnBuilderTypes.MultiEd25519Signature(
+      sigSorted, parsedBitmap,
+    );
+  }
+}
+
+function simpleMapToSigMap(smSigs: SimpleMap<TEd25519PublicKey, TEd25519Signature> | undefined): Map<string, TxnBuilderTypes.Ed25519Signature> {
+  const m = new Map<string, TxnBuilderTypes.Ed25519Signature>();
+  if (smSigs) {
+    smSigs.data.forEach(entry => {
+      const pk = HexString.ensure(entry.key);
+      const sig = new TxnBuilderTypes.Ed25519Signature(HexBuffer(entry.value));
+      m.set(pk.hex(), sig);
+    });
+  }
+  return m;
+}
+
+export function assembleMultiSig(
+  pubKeys: string[],
+  sigs: SimpleMap<TEd25519PublicKey, TEd25519Signature>,
+  currentAccountPubKey: string,
+  sig: TxnBuilderTypes.Ed25519Signature
+) {
+  const msh = new MultiSigHelper(pubKeys, sigs);
+  msh.addSig(currentAccountPubKey, sig);
+  console.log('msh:', msh)
+  return msh.assembleSignatures();
+}
+
+export function assembleMultiSigTxn(
+  payload: string | Uint8Array,
+  pubKey: TxnBuilderTypes.MultiEd25519PublicKey,
+  sig: TxnBuilderTypes.MultiEd25519Signature,
+  sender: string
+): Uint8Array {
+  const authenticator =
+    new TxnBuilderTypes.TransactionAuthenticatorMultiEd25519(pubKey, sig);
+  const hb =
+    typeof payload === "string" ? HexBuffer(payload) : Buffer.from(payload);
+
+  const signingTx = MTransaction.deserialize(hb);
+  console.log('signingTx:', signingTx)
+  // @ts-expect-error sender is not readonly
+  signingTx.raw.sender = TxnBuilderTypes.AccountAddress.fromHex(sender);
+  const signedTx = new TxnBuilderTypes.SignedTransaction(
+    signingTx.raw,
+    authenticator
+  );
+  return BCS.bcsToBytes(signedTx);
 }

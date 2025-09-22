@@ -2,6 +2,9 @@
  * Utility functions for working with transaction signatures
  */
 
+import { HexString, TxnBuilderTypes, BCS } from "aptos"
+import { HexBuffer } from "./transaction"
+
 export interface ExtractedSignature {
   variant: number
   pubkey: Uint8Array
@@ -43,4 +46,46 @@ export const toHex = (bytes: Uint8Array): string => {
   return Array.from(bytes)
     .map(b => b.toString(16).padStart(2, '0'))
     .join('')
+}
+function noncePubKey(nonce: number) {
+  const pubKey = Buffer.alloc(TxnBuilderTypes.Ed25519PublicKey.LENGTH);
+  const deployerBuf = HexBuffer('0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e'); //msafe mainnet address
+  deployerBuf.copy(pubKey, 0, 0, 16);
+  pubKey.writeUInt32LE(nonce, 16);
+  return new TxnBuilderTypes.Ed25519PublicKey(pubKey);
+}
+
+function parsePubKey(publicKey: string | Uint8Array | HexString): TxnBuilderTypes.Ed25519PublicKey {
+  let pkBytes: BCS.Bytes;
+  if (typeof publicKey === 'string') {
+    pkBytes = HexString.ensure(publicKey).toUint8Array();
+  } else if (publicKey instanceof HexString) {
+    pkBytes = publicKey.toUint8Array();
+  } else {
+    pkBytes = publicKey;
+  }
+  return new TxnBuilderTypes.Ed25519PublicKey(pkBytes);
+}
+
+const IMPORT_NONCE = BigInt('0xffffffffffffffff');
+export function computeMultiSigAddress(owners: string[] | Uint8Array[] | HexString[], threshold: number, nonce: bigint):
+  [TxnBuilderTypes.MultiEd25519PublicKey, HexString, HexString] {
+
+  const publicKeys: TxnBuilderTypes.Ed25519PublicKey[] = owners.map( (owner) => {
+    return parsePubKey(owner);
+  });
+  if(nonce !== IMPORT_NONCE) {
+    publicKeys.push(noncePubKey(Number(nonce)));
+  }
+  const multiPubKey = new TxnBuilderTypes.MultiEd25519PublicKey(
+    publicKeys, threshold,
+  );
+  const authKey = TxnBuilderTypes.AuthenticationKey.fromMultiEd25519PublicKey(
+    multiPubKey
+  );
+  return [
+    multiPubKey,
+    HexString.fromUint8Array(multiPubKey.toBytes()),
+    authKey.derivedAddress()
+  ];
 }
