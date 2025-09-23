@@ -137,6 +137,8 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   const [isAddressVerified, setIsAddressVerified] = useState(false)
   const [accountAllowances, setAccountAllowances] = useState<Map<string, boolean>>(new Map())
   const [expandedPayloads, setExpandedPayloads] = useState<Set<number>>(new Set())
+  const [isAmountValid, setIsAmountValid] = useState(true)
+  const [sliderValue, setSliderValue] = useState(0)
 
   // Helper function to safely extract string value from coin_type_name
   const getCoinTypeName = useCallback((coinTypeName: string | { inner: string }): string => {
@@ -155,6 +157,88 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     const humanReadableAmount = balance?.availableForWithdrawal ? parseFloat(balance.availableForWithdrawal) / Math.pow(10, balance.decimals) : '0';
     setWithdrawalForm(prev => ({ ...prev, amount: humanReadableAmount.toString(), selectedToken: token }))
   }, [msafeAccounts, selectedAccountAddress])
+
+  // Validate amount
+  const validateAmount = useCallback((amount: string): boolean => {
+    if (!amount || amount.trim() === '') return false
+    const numAmount = parseFloat(amount)
+    if (isNaN(numAmount) || numAmount <= 0) return false
+    
+    // Check decimal places if we have a selected token
+    if (selectedAccountAddress && withdrawalForm.selectedToken) {
+      const selectedAccount = msafeAccounts.find(acc => acc.address === selectedAccountAddress)
+      if (selectedAccount) {
+        const selectedTokenBalance = selectedAccount.balances.find(
+          balance => balance.coinType === withdrawalForm.selectedToken
+        )
+        if (selectedTokenBalance) {
+          const decimals = selectedTokenBalance.decimals
+          const decimalPlaces = (amount.split('.')[1] || '').length
+          return decimalPlaces <= decimals
+        }
+      }
+    }
+    
+    return true
+  }, [selectedAccountAddress, withdrawalForm.selectedToken, msafeAccounts])
+
+  // Get maximum allowed amount for selected token
+  const getMaxAllowedAmount = useCallback((): number => {
+    if (selectedAccountAddress && withdrawalForm.selectedToken) {
+      const selectedAccount = msafeAccounts.find(acc => acc.address === selectedAccountAddress)
+      if (selectedAccount) {
+        const selectedTokenBalance = selectedAccount.balances.find(
+          balance => balance.coinType === withdrawalForm.selectedToken
+        )
+        if (selectedTokenBalance) {
+          return parseFloat(selectedTokenBalance.availableForWithdrawal || '0') / Math.pow(10, selectedTokenBalance.decimals)
+        }
+      }
+    }
+    return 0
+  }, [selectedAccountAddress, withdrawalForm.selectedToken, msafeAccounts])
+
+  // Handle slider change
+  const handleSliderChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const percentage = parseInt(e.target.value)
+    setSliderValue(percentage)
+    
+    const maxAmount = getMaxAllowedAmount()
+    let amount = (maxAmount * percentage / 100)
+    
+    // Round to appropriate decimal places based on selected token
+    if (selectedAccountAddress && withdrawalForm.selectedToken) {
+      const selectedAccount = msafeAccounts.find(acc => acc.address === selectedAccountAddress)
+      if (selectedAccount) {
+        const selectedTokenBalance = selectedAccount.balances.find(
+          balance => balance.coinType === withdrawalForm.selectedToken
+        )
+        if (selectedTokenBalance) {
+          const decimals = selectedTokenBalance.decimals
+          amount = Math.round(amount * Math.pow(10, decimals)) / Math.pow(10, decimals)
+        }
+      }
+    }
+    
+    setWithdrawalForm(prev => ({ ...prev, amount: amount.toString() }))
+    setIsAmountValid(validateAmount(amount.toString()))
+    setIsAddressVerified(false) // Reset verification when amount changes
+  }, [getMaxAllowedAmount, validateAmount, selectedAccountAddress, withdrawalForm.selectedToken, msafeAccounts])
+
+  // Handle amount change with validation
+  const handleAmountChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const amount = e.target.value
+    setWithdrawalForm(prev => ({ ...prev, amount }))
+    setIsAmountValid(validateAmount(amount))
+    setIsAddressVerified(false) // Reset verification when amount changes
+    
+    // Update slider to match manual input
+    const maxAmount = getMaxAllowedAmount()
+    if (maxAmount > 0) {
+      const percentage = Math.round((parseFloat(amount) / maxAmount) * 100)
+      setSliderValue(Math.min(100, Math.max(0, percentage)))
+    }
+  }, [validateAmount, getMaxAllowedAmount])
 
   // Reset address verification when receiver address changes
   const handleReceiverChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1036,6 +1120,8 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         amount: ''
       })
       setIsAddressVerified(false)
+      setIsAmountValid(true)
+      setSliderValue(0)
       
       // Refresh withdrawal requests
       await loadWithdrawalRequests()
@@ -1643,39 +1729,104 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                     onChange={handleReceiverChange}
                     required
                   />
-                  {withdrawalForm.receiver && (
+                </div>
+
+                <div className="space-y-2">
+                  {/* Amount Slider */}
+                  {withdrawalForm.selectedToken && getMaxAllowedAmount() > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-sm">
+                        <Label htmlFor="amount">Amount: {sliderValue}%</Label>
+                        <span className="text-muted-foreground">Max: {getMaxAllowedAmount().toFixed(8)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={sliderValue}
+                        onChange={handleSliderChange}
+                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 range-slider"
+                        style={{
+                          background: `linear-gradient(to right, #6b7280 0%, #6b7280 ${sliderValue}%, #e5e7eb ${sliderValue}%, #e5e7eb 100%)`
+                        }}
+                      />
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span>0%</span>
+                        <span>25%</span>
+                        <span>50%</span>
+                        <span>75%</span>
+                        <span>100%</span>
+                      </div>
+                    </div>
+                  )}
+                  
+                  <Input
+                    id="amount"
+                    type="number"
+                    step={(() => {
+                      if (selectedAccountAddress && withdrawalForm.selectedToken) {
+                        const selectedAccount = msafeAccounts.find(acc => acc.address === selectedAccountAddress)
+                        if (selectedAccount) {
+                          const selectedTokenBalance = selectedAccount.balances.find(
+                            balance => balance.coinType === withdrawalForm.selectedToken
+                          )
+                          if (selectedTokenBalance) {
+                            return (1 / Math.pow(10, selectedTokenBalance.decimals)).toString()
+                          }
+                        }
+                      }
+                      return "0.00000001"
+                    })()}
+                    placeholder="0.0"
+                    value={withdrawalForm.amount}
+                    onChange={handleAmountChange}
+                    onWheel={(e) => e.currentTarget.blur()}
+                    className={!isAmountValid && withdrawalForm.amount ? 'border-red-500 focus:border-red-500' : ''}
+                    required
+                  />
+                  
+                  {withdrawalForm.amount && !isAmountValid && (
+                    <p className="text-sm text-red-600 dark:text-red-400">
+                      {(() => {
+                        if (selectedAccountAddress && withdrawalForm.selectedToken) {
+                          const selectedAccount = msafeAccounts.find(acc => acc.address === selectedAccountAddress)
+                          if (selectedAccount) {
+                            const selectedTokenBalance = selectedAccount.balances.find(
+                              balance => balance.coinType === withdrawalForm.selectedToken
+                            )
+                            if (selectedTokenBalance) {
+                              const decimals = selectedTokenBalance.decimals
+                              const decimalPlaces = (withdrawalForm.amount.split('.')[1] || '').length
+                              if (decimalPlaces > decimals) {
+                                return `Maximum ${decimals} decimal places allowed for this token`
+                              }
+                            }
+                          }
+                        }
+                        return 'Please enter a valid amount greater than 0'
+                      })()}
+                    </p>
+                  )}
+                  {withdrawalForm.receiver && withdrawalForm.amount && isAmountValid && (
                     <div className="flex items-center space-x-2">
                       <Checkbox
-                        id="address-verification"
+                        id="verification"
                         checked={isAddressVerified}
                         onCheckedChange={(checked: boolean) => setIsAddressVerified(checked)}
                       />
                       <Label 
-                        htmlFor="address-verification" 
+                        htmlFor="verification" 
                         className="text-sm text-muted-foreground cursor-pointer"
                       >
-                        I have verified the receiver address is correct
+                        I have verified the receiver address and amount are correct
                       </Label>
                     </div>
                   )}
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="amount">Amount</Label>
-                  <Input
-                    id="amount"
-                    type="number"
-                    step="0.00000001"
-                    placeholder="0.0"
-                    value={withdrawalForm.amount}
-                    onChange={(e) => setWithdrawalForm(prev => ({ ...prev, amount: e.target.value }))}
-                    required
-                  />
-                </div>
-
                 <Button
                   type="submit"
-                  disabled={!withdrawalForm.selectedToken || !withdrawalForm.receiver || !withdrawalForm.amount || !isAddressVerified || isCreatingWithdrawal}
+                  disabled={!withdrawalForm.selectedToken || !withdrawalForm.receiver || !withdrawalForm.amount || !isAmountValid || !isAddressVerified || isCreatingWithdrawal}
                   className="w-full"
                 >
                   {isCreatingWithdrawal ? (
@@ -1805,7 +1956,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                               {isExecuted && (
                                 <div className="flex items-center gap-2">
                                   <span className="text-xs text-muted-foreground">
-                                    {amount.toFixed(tokenData?.decimals || 8)} {tokenData?.symbol}
+                                    {parseFloat(amount.toFixed(tokenData?.decimals || 8)).toString()} {tokenData?.symbol}
                                   </span>
                                   <ChevronDown 
                                     className={`h-4 w-4 text-muted-foreground transition-transform ${

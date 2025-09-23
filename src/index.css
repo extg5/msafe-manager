@@ -1,6 +1,38 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* Custom range slider styles */
+.range-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  background: #6b7280;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.range-slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  background: #6b7280;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.range-slider::-webkit-slider-track {
+  height: 8px;
+  border-radius: 4px;
+}
+
+.range-slider::-moz-range-track {
+  height: 8px;
+  border-radius: 4px;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
