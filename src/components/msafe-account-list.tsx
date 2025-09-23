@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react"
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { useWallet } from "@aptos-labs/wallet-adapter-react"
 import { Aptos, AptosConfig, Deserializer, Ed25519PublicKey, Ed25519Signature, Network, RawTransaction } from "@aptos-labs/ts-sdk"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -50,6 +50,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { List, Wallet, Coins, Send, AlertCircle, Clock, CheckCircle } from "lucide-react"
 import { HexBuffer, MigrationProofMessage, MSafeTransaction, toMigrateTx, Transaction, TypeMessage, type MSafeTxnInfo, type SimpleMap, type TEd25519PublicKey, type TEd25519Signature } from "@/utils/transaction"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs"
+import { useCurrentAddressStore } from "@/utils/current-address-store"
 
 // MSafe deployer address for Mainnet
 const MSAFE_MODULES = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
@@ -61,6 +62,7 @@ interface RegistryData {
   pendings: MSafeTxnInfo[]
   msafes: string[],
   threshold: Map<string, number>
+  sequenceNumbers: Map<string, bigint>
 }
 
 interface TokenBalance {
@@ -111,7 +113,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   const [registryData, setRegistryData] = useState<RegistryData | null>(null)
   const [isChecking, setIsChecking] = useState(false)
   const [msafeAccounts, setMsafeAccounts] = useState<MSafeAccount[]>([])
-  const [selectedAccountAddress, setSelectedAccountAddress] = useState<string | null>(null)
+  const { currentAddress: selectedAccountAddress, setCurrentAddress: setSelectedAccountAddress } = useCurrentAddressStore()
   const [pendingCount, setPendingCount] = useState(0)
   const [withdrawalForm, setWithdrawalForm] = useState<WithdrawalFormData>({
     selectedToken: '0x1::aptos_coin::AptosCoin',
@@ -124,11 +126,22 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   const [signingRequests, setSigningRequests] = useState<Set<number>>(new Set())
   const [coinsRegistry, setCoinsRegistry] = useState<{symbol: string, decimals: number, type: string, faType?: string}[]>([])
   const [activeTab, setActiveTab] = useState("withdrawal-requests")
+  const [currentMsafeInfo, setCurrentMsafeInfo] = useState<MSafeInfo | null | undefined>(null)
+
   useEffect(() => {
     fetch('https://raw.githubusercontent.com/pontem-network/coins-registry/refs/heads/main/src/coins.json')
       .then(response => response.json())
       .then(data => setCoinsRegistry(data))
   }, [])
+
+  const onTokenChange = useCallback((token: string) => {
+    const balance = msafeAccounts.find(account => account.address === selectedAccountAddress)?.balances.find(balance => balance.coinType === token);
+    console.log('balance', balance, msafeAccounts)
+    const humanReadableAmount = balance?.availableForWithdrawal ? parseFloat(balance.availableForWithdrawal) / Math.pow(10, balance.decimals) : '0';
+    setWithdrawalForm(prev => ({ ...prev, amount: humanReadableAmount.toString(), selectedToken: token }))
+  }, [msafeAccounts, selectedAccountAddress])
+
+
 
   useEffect(() => {
     console.log('Withdrawal requests:', withdrawalRequests)
@@ -139,6 +152,14 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     if (!selectedAccountAddress) return null
     return msafeAccounts.find(account => account.address === selectedAccountAddress) || null
   }, [selectedAccountAddress, msafeAccounts])
+
+  // Set max available balance when page loads and when token changes
+  useEffect(() => {
+    if (selectedAccount && selectedAccount.balances.length > 0) {
+      const currentToken = withdrawalForm.selectedToken || selectedAccount.balances[0]?.coinType || '0x1::aptos_coin::AptosCoin'
+      onTokenChange(currentToken)
+    }
+  }, [selectedAccount, onTokenChange, withdrawalForm.selectedToken])
 
   // Initialize Aptos client for Mainnet
   const aptosConfig = useMemo(() => new AptosConfig({ 
@@ -279,10 +300,10 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   }
 
   // Check registration status and fetch MSafe accounts
-  const checkRegistration = useCallback(async () => {
+  const checkRegistration = useCallback(async (silent: boolean = false) => {
     if (!account?.address) return
 
-    setIsChecking(true)
+    setIsChecking(!silent)
 
     try {
       // Get registry resource for the account
@@ -341,6 +362,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         }
         console.log('ownedMSafes', ownedMSafes)
         const threshold = new Map<string, number>();
+        const sequenceNumbers = new Map<string, bigint>();
         // Process pending MSAFEs
         if (msafes.length > 0) {
           for (const msafe of msafes) {
@@ -354,6 +376,9 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
               txn_book: MSafeInfo['txn_book']
             }
             threshold.set(msafe, msafeData.info.threshold)
+            const currentSN = await getAccountSequenceNumber(msafe)
+            console.log('currentSN', currentSN)
+            sequenceNumbers.set(msafe, currentSN)
             console.log('msafeData', msafeData)
             if (Number(msafeData.txn_book.tx_hashes.length) <= 0) continue;
             const { sequence_number: sn_str } = await aptos.account.getAccountInfo({accountAddress: msafe});
@@ -391,7 +416,8 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
           publicKey: publicKey,
           pendings: pendings,
           msafes: msafes,
-          threshold: threshold
+          threshold: threshold,
+          sequenceNumbers: sequenceNumbers
         }
         
         setRegistryData(registryData)
@@ -408,7 +434,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         setMsafeAccounts(accounts)
         
         // Auto-select the first account if available
-        if (accounts.length > 0) {
+        if (accounts.length > 0 && !accounts.map(account => account.address).includes(selectedAccountAddress || '')) {
           setSelectedAccountAddress(accounts[0].address)
           onAccountSelect?.(accounts[0])
         }
@@ -831,7 +857,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         
         // Refresh withdrawal requests to see updated status
         await loadWithdrawalRequests()
-        await checkRegistration();
+        await checkRegistration(true);
         return;
       }
 
@@ -1116,7 +1142,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     })
     console.log('Committed transaction:', committedTx)
     await loadWithdrawalRequests()
-    await checkRegistration();
+    await checkRegistration(true);
     return;
   }, [aptos.transaction, selectedAccount, account, getMSafeInfo, loadWithdrawalRequests, checkRegistration])
 
@@ -1147,13 +1173,13 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   }, [withdrawalForm, createWithdrawalRequest])
 
   // Handle account selection
-  const handleAccountSelect = useCallback((account: MSafeAccount) => {
+  const handleAccountSelect = useCallback(async (account: MSafeAccount) => {
     setSelectedAccountAddress(account.address)
     onAccountSelect?.(account)
     
     // Load balances if not already loaded
     if (account.balances.length === 0 && !account.isLoadingBalances) {
-      loadAccountBalances(account)
+      await loadAccountBalances(account)
     }
   }, [onAccountSelect, loadAccountBalances])
 
@@ -1168,6 +1194,33 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       setSelectedAccountAddress(null)
     }
   }, [connected, account, checkRegistration])
+
+  const previousSelectedAccountAddress = useRef<string | null>(null)
+  useEffect(() => {
+      const getMsafeInfo = async () => {
+        if (selectedAccountAddress && selectedAccountAddress !== previousSelectedAccountAddress.current) {
+          previousSelectedAccountAddress.current = selectedAccountAddress
+          const msafeInfo = await getMSafeInfo(selectedAccountAddress)
+          setCurrentMsafeInfo(msafeInfo || null)
+        }
+      }
+      void getMsafeInfo()
+  }, [selectedAccountAddress, getMSafeInfo])
+
+  const getAddressForPublicKey = useCallback((publicKey: string) => {
+    console.log('publicKey', publicKey)
+    const index = currentMsafeInfo?.public_keys.findIndex((pk) => pk.toLowerCase() === publicKey.toLowerCase())
+    if (typeof index !== 'number' || index === -1) {
+      return null
+    }
+    console.log('index', index)
+    console.log('currentMsafeInfo', currentMsafeInfo)
+    const address = currentMsafeInfo?.owners[index]
+    if (!address) {
+      return null
+    }
+    return address
+  }, [currentMsafeInfo])
 
   if (!connected || !account?.address) {
     return null
@@ -1348,7 +1401,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                   <Label htmlFor="token-select">Select Token</Label>
                   <Select
                     value={withdrawalForm.selectedToken}
-                    onValueChange={(value) => setWithdrawalForm(prev => ({ ...prev, selectedToken: value }))}
+                    onValueChange={(value) => onTokenChange(value)}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Choose a token" />
@@ -1545,7 +1598,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                       <tr className="border-b">
                                         <th className="text-left p-2">SN</th>
                                         <th className="text-left p-2">Signed</th>
-                                        <th className="text-left p-2">Signer</th>
+                                        <th className="text-left p-2">Signers</th>
                                         <th className="text-left p-2">Signatures</th>
                                         <th className="text-left p-2">Action</th>
                                       </tr>
@@ -1568,7 +1621,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                               {tx.signatures?.data && Object.keys(tx.signatures.data).length > 0 ? (
                                                 Object.entries(tx.signatures.data).map(([index, sig], sigIndex) => (
                                                   <div key={sigIndex} className="text-xs font-mono">
-                                                    {sig.key}
+                                                    {getAddressForPublicKey(sig.key)}
                                                   </div>
                                                 ))
                                               ) : (
@@ -1583,24 +1636,25 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                           </td>
                                           <td className="p-2">
                                             {tx.signatures?.data.length !== registryData?.threshold.get(tx.sender.hex()) ? (
-                                            <LoadingButton 
-                                              loading={isSigning} 
-                                              size="sm" 
-                                              onClick={() => signAndSendWithdrawalRequest(index, tx)} 
-                                              disabled={tx.isSigned}
-                                              className="text-xs"
-                                            >
-                                              {tx.isSigned ? 'Waiting for other signatures' : 'Sign & Send'}
-                                            </LoadingButton>) : (
-                                            <LoadingButton 
-                                              loading={isSigning} 
-                                              size="sm" 
-                                              onClick={() => sendFullSignedTransaction(tx)} 
-                                              disabled={tx.signatures?.data.length !== registryData?.threshold.get(tx.sender.hex())}
-                                              className="text-xs"
-                                            >
-                                              {tx.signatures?.data.length !== registryData?.threshold.get(tx.sender.hex()) ? 'Not All Signatures' : 'Broadcast'}
-                                            </LoadingButton>
+                                              <LoadingButton 
+                                                loading={isSigning} 
+                                                size="sm" 
+                                                onClick={() => signAndSendWithdrawalRequest(index, tx)} 
+                                                disabled={tx.isSigned}
+                                                className="text-xs"
+                                              >
+                                                {tx.isSigned ? 'Waiting for other signatures' : 'Sign & Send'}
+                                              </LoadingButton>) 
+                                            : tx.sn <= (registryData?.sequenceNumbers.get(tx.sender.hex()) || 0n) && !(tx.expiration < new Date()) && (
+                                              <LoadingButton 
+                                                loading={isSigning} 
+                                                size="sm" 
+                                                onClick={() => sendFullSignedTransaction(tx)} 
+                                                disabled={tx.signatures?.data.length !== registryData?.threshold.get(tx.sender.hex())}
+                                                className="text-xs"
+                                              >
+                                                {tx.signatures?.data.length !== registryData?.threshold.get(tx.sender.hex()) ? 'Not All Signatures' : 'Broadcast'}
+                                              </LoadingButton>
                                             )}
                                           </td>
                                         </tr>
@@ -1644,7 +1698,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                             <th className="text-left p-2">SN</th>
                             <th className="text-left p-2">Senders</th>
                             <th className="text-left p-2">Signed</th>
-                            <th className="text-left p-2">Signer</th>
+                            <th className="text-left p-2">Signers</th>
                             <th className="text-left p-2">Signatures</th>
                             <th className="text-left p-2">Actions</th>
                           </tr>
@@ -1697,7 +1751,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                           {tx.signatures?.data && Object.keys(tx.signatures.data).length > 0 ? (
                                             Object.entries(tx.signatures.data).map(([key, sig], sigIndex) => (
                                               <div key={sigIndex} className="text-xs font-mono">
-                                                {sig.key.slice(0, 8)}...{sig.key.slice(-8)}
+                                                {getAddressForPublicKey(sig.key)}
                                               </div>
                                             ))
                                           ) : (
@@ -1736,7 +1790,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                               Exp: {tx.expiration.toLocaleString()}
                                             </span>
                                           )}
-                                          {!isExpired && tx.signatures?.data.length === registryData?.threshold.get(tx.sender.hex()) && (
+                                          {!isExpired && tx.signatures?.data.length === registryData?.threshold.get(tx.sender.hex()) && tx.sn <= (registryData.sequenceNumbers.get(tx.sender.hex()) || 0n) && (
                                             <LoadingButton 
                                               loading={false} 
                                               size="sm" 
