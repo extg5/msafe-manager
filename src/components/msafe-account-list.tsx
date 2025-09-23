@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react"
+import React, { useState, useEffect, useCallback, useMemo } from "react"
 import { useWallet } from "@aptos-labs/wallet-adapter-react"
 import { Aptos, AptosConfig, Deserializer, Ed25519PublicKey, Ed25519Signature, Network, RawTransaction } from "@aptos-labs/ts-sdk"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -47,8 +47,9 @@ import { LoadingButton } from "@/components/ui/loading-button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { List, Wallet, Coins, Send, AlertCircle } from "lucide-react"
+import { List, Wallet, Coins, Send, AlertCircle, Clock } from "lucide-react"
 import { HexBuffer, MigrationProofMessage, MSafeTransaction, toMigrateTx, Transaction, TypeMessage, type MSafeTxnInfo, type SimpleMap, type TEd25519PublicKey, type TEd25519Signature } from "@/utils/transaction"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs"
 
 // MSafe deployer address for Mainnet
 const MSAFE_MODULES = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
@@ -58,7 +59,8 @@ const FK_MSAFE_MODULES = "0x55167d22d3a34525631b1eca1cb953c26b8f349021496bba874e
 interface RegistryData {
   publicKey: string
   pendings: MSafeTxnInfo[]
-  msafes: string[]
+  msafes: string[],
+  threshold: Map<string, number>
 }
 
 interface TokenBalance {
@@ -121,7 +123,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   const [isLoadingRequests, setIsLoadingRequests] = useState(false)
   const [signingRequests, setSigningRequests] = useState<Set<number>>(new Set())
   const [coinsRegistry, setCoinsRegistry] = useState<{symbol: string, decimals: number, type: string, faType?: string}[]>([])
-
+  const [activeTab, setActiveTab] = useState("withdrawal-requests")
   useEffect(() => {
     fetch('https://raw.githubusercontent.com/pontem-network/coins-registry/refs/heads/main/src/coins.json')
       .then(response => response.json())
@@ -235,7 +237,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   console.log('registryData', registryData)
 
   const  queryPendingTxHashBySN = async (
-    momentum: MSafeInfo,
+    momentum: {txn_book: MSafeInfo['txn_book']},
     sn: bigint
   ): Promise<string[]> => {
     return aptos.getTableItem({
@@ -249,7 +251,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   }
 
   const queryPendingTxByHash = async (
-    momentum: MSafeInfo,
+    momentum: {txn_book: MSafeInfo['txn_book']},
     txID: string | HexString
   ): Promise<TransactionType> => {
     return aptos.getTableItem({
@@ -288,6 +290,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         accountAddress: account.address,
         resourceType: `${MSAFE_MODULES}::registry::OwnerMomentumSafes`
       })
+      console.log('resource', resource)
 
       if (resource) {
         const ownedMSafes = resource as {
@@ -337,13 +340,20 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
           }
         }
         console.log('ownedMSafes', ownedMSafes)
+        const threshold = new Map<string, number>();
         // Process pending MSAFEs
         if (msafes.length > 0) {
           for (const msafe of msafes) {
             const msafeData = (await aptos.getAccountResource({
               accountAddress: msafe,
               resourceType: `${MSAFE_MODULES}::momentum_safe::Momentum`
-            })) as MSafeInfo
+            })) as {
+              info: {
+                threshold: number
+              }
+              txn_book: MSafeInfo['txn_book']
+            }
+            threshold.set(msafe, msafeData.info.threshold)
             console.log('msafeData', msafeData)
             if (Number(msafeData.txn_book.tx_hashes.length) <= 0) continue;
             const { sequence_number: sn_str } = await aptos.account.getAccountInfo({accountAddress: msafe});
@@ -380,7 +390,8 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         const registryData: RegistryData = {
           publicKey: publicKey,
           pendings: pendings,
-          msafes: msafes
+          msafes: msafes,
+          threshold: threshold
         }
         
         setRegistryData(registryData)
@@ -849,6 +860,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         
         // Refresh withdrawal requests to see updated status
         await loadWithdrawalRequests()
+        await checkRegistration();
         return;
       }
 
@@ -898,7 +910,8 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         return newSet
       })
     }
-  }, [selectedAccount, account, withdrawalRequests, getNextSN, getAccountSequenceNumber, loadWithdrawalRequests, getMSafeInfo, aptos.transaction])
+      await checkRegistration();
+  }, [selectedAccount, account, withdrawalRequests, getNextSN, getAccountSequenceNumber, loadWithdrawalRequests, getMSafeInfo, aptos.transaction, checkRegistration])
 
   // Create withdrawal request
   const createWithdrawalRequest = useCallback(async (formData: WithdrawalFormData) => {
@@ -1299,19 +1312,32 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
               </form>
             </div>
 
-            {/* Withdrawal Requests */}
+            {/* Tabs for Withdrawal Requests and Pending Transactions */}
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-medium">Withdrawal Requests</div>
-                <LoadingButton
-                  variant="outline"
-                  size="sm"
-                  loading={isLoadingRequests}
-                  onClick={loadWithdrawalRequests}
-                >
-                  Refresh
-                </LoadingButton>
-              </div>
+              <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="withdrawal-requests" className="flex items-center gap-2">
+                    <List className="h-4 w-4" />
+                    Withdrawal Requests
+                  </TabsTrigger>
+                  <TabsTrigger value="pending-transactions" className="flex items-center gap-2">
+                    <Clock className="h-4 w-4" />
+                    Pending Transactions
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="withdrawal-requests" className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-medium">Withdrawal Requests</div>
+                    <LoadingButton
+                      variant="outline"
+                      size="sm"
+                      loading={isLoadingRequests}
+                      onClick={loadWithdrawalRequests}
+                    >
+                      Refresh
+                    </LoadingButton>
+                  </div>
               
               {withdrawalRequests.length === 0 ? (
                 <div className="text-sm text-muted-foreground text-center py-4">
@@ -1331,7 +1357,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                     let pendingTxInfo = null
                     const msafeTransactions: MSafeTxnInfo[] = []
                     if (registryData && registryData.pendings.length > 0) {
-                      for (const pending of registryData.pendings.reverse()) {
+                      for (const pending of registryData.pendings.filter(pending => pending.sender.hex() === selectedAccount.address).reverse()) {
                         const args = pending.args as EntryFunctionArgs
                         if (args && args.args.length > 0 && args.args[0]) {
                           try {
@@ -1367,7 +1393,6 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                     
                     return (
                       <div key={index} className="p-3 border rounded-lg">
-                        {index}
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
                             <AlertCircle className="h-4 w-4 text-yellow-500" />
@@ -1385,7 +1410,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                               <b>Sequence Number:</b> {msafeTransactions.map(tx => tx.sn).join(', ')}
                             </div>
                           )}
-                          {hasPayload && (
+                          {(hasPayload && !hasPendingTx && !pendingTxInfo) && (
                             <LoadingButton
                               size="sm"
                               loading={isSigning}
@@ -1403,15 +1428,66 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                           <div><b>Metadata:</b> {request.fa_metadata?.inner || 'N/A'}</div>
                           <div className="break-all"><b>Payload:</b> {request.payload || 'N/A'}</div>
                           {hasPendingTx && pendingTxInfo && (
-                            <div className="flex flex-col items-center gap-2">
-                              {pendingTxInfo.requestId}
-                              {msafeTransactions.map(tx => tx.sn).join(', ')}
-                              <b className="text-yellow-600 dark:text-yellow-400">Pending Transaction:</b> Request ID {pendingTxInfo.requestId} ({pendingTxInfo.argsCount} args)
+                            <div className="space-y-2">
+                              <b className="text-yellow-600 dark:text-yellow-400">Pending Transactions:</b>
                               {!!msafeTransactions.length && (
-                                <div className="flex flex-col items-center gap-2">
-                                  {msafeTransactions.map(tx => (
-                                    <LoadingButton loading={isSigning} size="sm" onClick={() => signAndSendWithdrawalRequest(index, tx)} disabled={tx.isSigned}>{tx.isSigned ? `Signed & Sent for SN ${tx.sn}` : `Sign Existing TX & Send for SN ${tx.sn}`}</LoadingButton>
-                                  ))}
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-xs border-collapse">
+                                    <thead>
+                                      <tr className="border-b">
+                                        <th className="text-left p-2">SN</th>
+                                        <th className="text-left p-2">Signed</th>
+                                        <th className="text-left p-2">Who Signed</th>
+                                        <th className="text-left p-2">Signatures</th>
+                                        <th className="text-left p-2">Action</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {msafeTransactions.map((tx, txIndex) => (
+                                        <tr key={txIndex} className="border-b">
+                                          <td className="p-2 font-mono">{tx.sn}</td>
+                                          <td className="p-2">
+                                            <span className={`px-2 py-1 rounded text-xs ${
+                                              tx.isSigned 
+                                                ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' 
+                                                : 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200'
+                                            }`}>
+                                              {tx.isSigned ? 'Yes' : 'No'}
+                                            </span>
+                                          </td>
+                                          <td className="p-2">
+                                            <div className="space-y-1 flex flex-col">
+                                              {tx.signatures?.data && Object.keys(tx.signatures.data).length > 0 ? (
+                                                Object.entries(tx.signatures.data).map(([index, sig], sigIndex) => (
+                                                  <div key={sigIndex} className="text-xs font-mono">
+                                                    {sig.key}
+                                                  </div>
+                                                ))
+                                              ) : (
+                                                <span className="text-muted-foreground">None</span>
+                                              )}
+                                            </div>
+                                          </td>
+                                          <td className="p-2">
+                                            <span className="font-mono">
+                                              {tx.signatures ? Object.keys(tx.signatures.data).length : 0} / {registryData?.threshold.get(tx.sender.hex()) || 'N/A'}
+                                            </span>
+                                          </td>
+                                          <td className="p-2">
+                                            <LoadingButton 
+                                              loading={isSigning} 
+                                              size="sm" 
+                                              onClick={() => signAndSendWithdrawalRequest(index, tx)} 
+                                              disabled={tx.isSigned}
+                                              className="text-xs"
+                                            >
+                                              {tx.isSigned ? 'Completed' : 'Sign & Send'}
+                                            </LoadingButton>
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
                                 </div>
                               )}
                             </div>
@@ -1422,6 +1498,128 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                   })}
                 </div>
               )}
+                </TabsContent>
+
+                <TabsContent value="pending-transactions" className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-medium">Pending Transactions</div>
+                    <LoadingButton
+                      variant="outline"
+                      size="sm"
+                      loading={isLoadingRequests}
+                      onClick={loadWithdrawalRequests}
+                    >
+                      Refresh
+                    </LoadingButton>
+                  </div>
+                  
+                  {!registryData || registryData.pendings.length === 0 ? (
+                    <div className="text-sm text-muted-foreground text-center py-4">
+                      No pending transactions found
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs border-collapse">
+                        <thead>
+                          <tr className="border-b">
+                            <th className="text-left p-2">SN</th>
+                            <th className="text-left p-2">Senders</th>
+                            <th className="text-left p-2">Signed</th>
+                            <th className="text-left p-2">Who Signed</th>
+                            <th className="text-left p-2">Signatures</th>
+                            <th className="text-left p-2">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.entries(
+                            registryData.pendings
+                              .filter(pending => pending.sender.hex() === selectedAccount.address)
+                              .reduce((acc, tx) => {
+                                const sn = tx.sn.toString()
+                                if (!acc[sn]) {
+                                  acc[sn] = []
+                                }
+                                acc[sn].push(tx)
+                                return acc
+                              }, {} as Record<string, typeof registryData.pendings>)
+                          ).map(([sn, transactions]) => {
+                            return (
+                              <React.Fragment key={sn}>
+                                {transactions.map((tx, txIndex) => {
+                                  const threshold = registryData?.threshold.get(tx.sender.hex()) || 'N/A'
+                                  const isExpired = tx.expiration.getTime() < new Date().getTime()
+                                  console.log('tx', tx)
+                                  
+                                  return (
+                                    <tr key={`${sn}-${txIndex}`} className={`border-b ${isExpired ? 'bg-red-50 dark:bg-red-950/20' : ''}`}>
+                                      <td className="p-2 font-mono">
+                                        {txIndex === 0 ? sn : ''}
+                                      </td>
+                                      <td className="p-2 font-mono text-xs">
+                                        {tx.sender.hex().slice(0, 8)}...{tx.sender.hex().slice(-8)}
+                                      </td>
+                                      <td className="p-2">
+                                        <div className="flex flex-col gap-1">
+                                          <span className={`px-2 py-1 rounded text-xs ${
+                                            tx.isSigned 
+                                              ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200' 
+                                              : 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200'
+                                          }`}>
+                                            {tx.isSigned ? 'Yes' : 'No'}
+                                          </span>
+                                          {isExpired && (
+                                            <span className="px-2 py-1 rounded text-xs bg-red-200 dark:bg-red-800 text-red-900 dark:text-red-100">
+                                              Expired
+                                            </span>
+                                          )}
+                                        </div>
+                                      </td>
+                                      <td className="p-2">
+                                        <div className="space-y-1 flex flex-col">
+                                          {tx.signatures?.data && Object.keys(tx.signatures.data).length > 0 ? (
+                                            Object.entries(tx.signatures.data).map(([key, sig], sigIndex) => (
+                                              <div key={sigIndex} className="text-xs font-mono">
+                                                {sig.key.slice(0, 8)}...{sig.key.slice(-8)}
+                                              </div>
+                                            ))
+                                          ) : (
+                                            <span className="text-muted-foreground">None</span>
+                                          )}
+                                        </div>
+                                      </td>
+                                      <td className="p-2">
+                                        <span className="font-mono">
+                                          {tx.signatures ? Object.keys(tx.signatures.data).length : 0} / {threshold}
+                                        </span>
+                                      </td>
+                                      <td className="p-2">
+                                        <div className="flex flex-col gap-1">
+                                          <LoadingButton 
+                                            loading={false} 
+                                            size="sm" 
+                                            onClick={() => signAndSendWithdrawalRequest(0, tx)} 
+                                            disabled={tx.isSigned || isExpired}
+                                            className="text-xs"
+                                          >
+                                            {tx.isSigned ? 'Completed' : isExpired ? 'Expired' : 'Sign & Send'}
+                                          </LoadingButton>
+                                            <span className="text-xs text-red-600 dark:text-red-400 text-center">
+                                              Exp: {tx.expiration.toLocaleString()}
+                                            </span>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  )
+                                })}
+                              </React.Fragment>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </TabsContent>
+              </Tabs>
             </div>
           </CardContent>
         </Card>
