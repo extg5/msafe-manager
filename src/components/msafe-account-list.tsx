@@ -138,7 +138,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   const [accountAllowances, setAccountAllowances] = useState<Map<string, boolean>>(new Map())
   const [expandedPayloads, setExpandedPayloads] = useState<Set<number>>(new Set())
   const [isAmountValid, setIsAmountValid] = useState(true)
-  const [sliderValue, setSliderValue] = useState(0)
+  const [sliderValue, setSliderValue] = useState(10)
 
   // Helper function to safely extract string value from coin_type_name
   const getCoinTypeName = useCallback((coinTypeName: string | { inner: string }): string => {
@@ -154,8 +154,12 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   const onTokenChange = useCallback((token: string) => {
     const balance = msafeAccounts.find(account => account.address === selectedAccountAddress)?.balances.find(balance => balance.coinType === token);
     console.log('balance', balance, msafeAccounts)
-    const humanReadableAmount = balance?.availableForWithdrawal ? parseFloat(balance.availableForWithdrawal) / Math.pow(10, balance.decimals) : '0';
-    setWithdrawalForm(prev => ({ ...prev, amount: humanReadableAmount.toString(), selectedToken: token }))
+    const humanReadableAmount = balance?.availableForWithdrawal ? parseFloat(balance.availableForWithdrawal) / Math.pow(10, balance.decimals) : 0;
+    const tenPercentAmount = humanReadableAmount * 0.1; // Set to 10% of available amount
+    // Round to the token's decimal places to avoid floating point precision errors
+    const roundedAmount = Math.round(tenPercentAmount * Math.pow(10, balance?.decimals || 8)) / Math.pow(10, balance?.decimals || 8);
+    setWithdrawalForm(prev => ({ ...prev, amount: roundedAmount.toString(), selectedToken: token }))
+    setSliderValue(10) // Set slider to 10%
   }, [msafeAccounts, selectedAccountAddress])
 
   // Validate amount
@@ -1121,7 +1125,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       })
       setIsAddressVerified(false)
       setIsAmountValid(true)
-      setSliderValue(0)
+      setSliderValue(10)
       
       // Refresh withdrawal requests
       await loadWithdrawalRequests()
@@ -1595,7 +1599,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Wallet className="h-5 w-5" />
-              Account Details
+              Multisig Wallet Details
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -1608,7 +1612,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
 
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <div className="text-sm font-medium">Token Balances</div>
+                <div className="text-sm font-medium">Assets</div>
                 <LoadingButton
                   variant="outline"
                   size="sm"
@@ -1686,11 +1690,11 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
             </div>
 
             {/* Withdrawal Form */}
-            <div className="space-y-4">
-              <div className="text-sm font-medium">Create Withdrawal Request</div>
-              <form onSubmit={handleWithdrawalSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="token-select">Select Token</Label>
+            <div className="space-y-6 pt-6 pb-12">
+              <div className="text-lg font-semibold">Create Withdrawal Request</div>
+              <form onSubmit={handleWithdrawalSubmit} className="space-y-8">
+                <div className="space-y-3 pt-3">
+                  <Label htmlFor="token-select">Select Asset</Label>
                   <Select
                     value={withdrawalForm.selectedToken}
                     onValueChange={(value) => onTokenChange(value)}
@@ -1719,7 +1723,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                   </Select>
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-3 pt-2">
                   <Label htmlFor="receiver">Receiver Address</Label>
                   <Input
                     id="receiver"
@@ -1727,11 +1731,12 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                     placeholder="0x..."
                     value={withdrawalForm.receiver}
                     onChange={handleReceiverChange}
+                    className="bg-background text-foreground border-border focus:border-ring"
                     required
                   />
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-3 pt-2">
                   {/* Amount Slider */}
                   {withdrawalForm.selectedToken && getMaxAllowedAmount() > 0 && (
                     <div className="space-y-2">
@@ -1745,7 +1750,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                         max="100"
                         value={sliderValue}
                         onChange={handleSliderChange}
-                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 range-slider"
+                        className="w-full h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 range-slider"
                         style={{
                           background: `linear-gradient(to right, #6b7280 0%, #6b7280 ${sliderValue}%, #e5e7eb ${sliderValue}%, #e5e7eb 100%)`
                         }}
@@ -1781,7 +1786,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                     value={withdrawalForm.amount}
                     onChange={handleAmountChange}
                     onWheel={(e) => e.currentTarget.blur()}
-                    className={!isAmountValid && withdrawalForm.amount ? 'border-red-500 focus:border-red-500' : ''}
+                    className={`bg-background text-foreground border-border focus:border-ring ${!isAmountValid && withdrawalForm.amount ? 'border-red-500 focus:border-red-500' : ''}`}
                     required
                   />
                   
@@ -1827,7 +1832,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                 <Button
                   type="submit"
                   disabled={!withdrawalForm.selectedToken || !withdrawalForm.receiver || !withdrawalForm.amount || !isAmountValid || !isAddressVerified || isCreatingWithdrawal}
-                  className="w-full"
+                  className="w-full mt-6"
                 >
                   {isCreatingWithdrawal ? (
                     <>

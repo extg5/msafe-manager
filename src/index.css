@@ -24,13 +24,13 @@
 }
 
 .range-slider::-webkit-slider-track {
-  height: 8px;
-  border-radius: 4px;
+  height: 4px;
+  border-radius: 2px;
 }
 
 .range-slider::-moz-range-track {
-  height: 8px;
-  border-radius: 4px;
+  height: 4px;
+  border-radius: 2px;
 }
 
 @custom-variant dark (&:is(.dark *));
