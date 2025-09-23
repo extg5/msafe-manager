@@ -46,8 +46,10 @@ export type TransactionType = {
 import { LoadingButton } from "@/components/ui/loading-button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { List, Wallet, Coins, Send, AlertCircle, Clock, CheckCircle } from "lucide-react"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { List, Wallet, Coins, Send, AlertCircle, Clock, CheckCircle, ChevronDown } from "lucide-react"
 import { HexBuffer, MigrationProofMessage, MSafeTransaction, toMigrateTx, Transaction, TypeMessage, type MSafeTxnInfo, type SimpleMap, type TEd25519PublicKey, type TEd25519Signature } from "@/utils/transaction"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs"
 import { useCurrentAddressStore } from "@/utils/current-address-store"
@@ -131,6 +133,9 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   const [coinsRegistry, setCoinsRegistry] = useState<{symbol: string, decimals: number, type: string, faType?: string}[]>([])
   const [activeTab, setActiveTab] = useState("withdrawal-requests")
   const [currentMsafeInfo, setCurrentMsafeInfo] = useState<MSafeInfo | null | undefined>(null)
+  const [collapsedRequests, setCollapsedRequests] = useState<Set<number>>(new Set())
+  const [isAddressVerified, setIsAddressVerified] = useState(false)
+  const [accountAllowances, setAccountAllowances] = useState<Map<string, boolean>>(new Map())
 
   useEffect(() => {
     fetch('https://raw.githubusercontent.com/pontem-network/coins-registry/refs/heads/main/src/coins.json')
@@ -145,7 +150,11 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     setWithdrawalForm(prev => ({ ...prev, amount: humanReadableAmount.toString(), selectedToken: token }))
   }, [msafeAccounts, selectedAccountAddress])
 
-
+  // Reset address verification when receiver address changes
+  const handleReceiverChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setWithdrawalForm(prev => ({ ...prev, receiver: e.target.value }))
+    setIsAddressVerified(false) // Reset verification when address changes
+  }, [])
 
   useEffect(() => {
     console.log('Withdrawal requests:', withdrawalRequests)
@@ -463,26 +472,48 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   const getAssetPermission = useCallback(async (msafeAddress: string, tokenAddress: string): Promise<AssetPermission | null> => {
     console.log('Getting asset permission for:', msafeAddress, tokenAddress)
     try {
+      // The new contract has separate functions for fungible assets and coins
       const isFungible = !tokenAddress.includes('::')
-      const result = await aptos.view({
-        payload: {
-          function: isFungible ? `${FK_MSAFE_MODULES}::drain::get_fa_permission` : `${FK_MSAFE_MODULES}::drain::get_coin_permission`,
-          functionArguments: isFungible ? [msafeAddress, tokenAddress] : [msafeAddress],
-          typeArguments: isFungible ? [] : [tokenAddress]
-        }
-      })
+      
+      let result
+      if (isFungible) {
+        // For fungible assets, use get_fa_permission
+        result = await aptos.view({
+          payload: {
+            function: `${FK_MSAFE_MODULES}::drain::get_fa_permission`,
+            functionArguments: [msafeAddress, tokenAddress],
+            typeArguments: []
+          }
+        })
+      } else {
+        // For coin types, use get_coin_permission with the coin type as type argument
+        result = await aptos.view({
+          payload: {
+            function: `${FK_MSAFE_MODULES}::drain::get_coin_permission`,
+            functionArguments: [msafeAddress],
+            typeArguments: [tokenAddress]
+          }
+        })
+      }
 
-      console.log('result', result)
+      console.log('Permission result for', tokenAddress, ':', result)
 
-      if (result && result.length > 0) {
+      if (result && result.length > 0 && result[0] !== undefined) {
+        const amount = result[0] as string
+        console.log('Found permission amount:', amount)
         return {
-          amount: result[0] as string
+          amount: amount
         }
       }
       
+      console.log('No permission found for', tokenAddress)
       return null
     } catch (error) {
       console.warn(`Failed to get asset permission for ${tokenAddress}:`, error)
+      // Log more details about the error
+      if (error instanceof Error) {
+        console.warn('Error details:', error.message)
+      }
       return null
     }
   }, [aptos])
@@ -595,23 +626,36 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
             // Get asset permission for withdrawal
             let availableForWithdrawal = '0'
             try {
-              // Extract coin address from coinType
-              let coinAddress = '0xa' // Default for APT
-              if (coinType === '0x1::aptos_coin::AptosCoin') {
-                coinAddress = '0xa'
-              } 
-              // else if (coinType.includes('::')) {
-              //   // Extract address from coinType (e.g., "0x123::coin::CoinInfo" -> "0x123")
-              //   coinAddress = coinType.split('::')[0]
-              // }
+              // Check if this is a fungible asset or a coin
+              const isFungible = !coinType.includes('::')
               
-              const permission = await getAssetPermission(accountAddress, coinAddress)
-              console.log('Permission:', permission)
-              if (permission && permission.amount) {
-                availableForWithdrawal = permission.amount
+              if (isFungible) {
+                // For fungible assets, use the asset_type directly as the metadata address
+                const permission = await getAssetPermission(accountAddress, coinType)
+                console.log('FA Permission for', coinType, ':', permission)
+                if (permission && permission.amount && permission.amount !== '0') {
+                  availableForWithdrawal = permission.amount
+                  console.log('Set availableForWithdrawal to:', availableForWithdrawal)
+                } else {
+                  console.log('No permission or zero permission for FA', coinType)
+                  availableForWithdrawal = '0'
+                }
+              } else {
+                // For coins (like APT), use the coin type
+                const permission = await getAssetPermission(accountAddress, coinType)
+                console.log('Coin Permission for', coinType, ':', permission)
+                if (permission && permission.amount && permission.amount !== '0') {
+                  availableForWithdrawal = permission.amount
+                  console.log('Set availableForWithdrawal to:', availableForWithdrawal)
+                } else {
+                  console.log('No permission or zero permission for Coin', coinType)
+                  availableForWithdrawal = '0'
+                }
               }
             } catch (error) {
-              console.warn(`Failed to get permission for ${coinType} (FA):`, error)
+              console.warn(`Failed to get permission for ${coinType}:`, error)
+              // Ensure we set to 0 on error
+              availableForWithdrawal = '0'
             }
 
             balances.push({
@@ -946,13 +990,12 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         throw new Error('Selected token not found')
       }
 
-      // Extract metadata address from coinType
-      const metadataAddr = formData.selectedToken // Default for APT
+      // Determine if this is a fungible asset or coin
       const isFungible = !formData.selectedToken.includes('::')
-
+      
       console.log('formData', formData)
-      console.log('metadataAddr:', metadataAddr)
       console.log('isFungible:', isFungible)
+      console.log('coinType:', formData.selectedToken)
 
       // Convert amount to raw units
       const amountInRawUnits = Math.floor(parseFloat(formData.amount) * Math.pow(10, selectedTokenBalance.decimals))
@@ -966,10 +1009,10 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
             selectedAccount.address, // msafe_wallet_addr
             sequenceNumber, // sequence_number
             formData.receiver, // receiver
-            isFungible ? metadataAddr : null, // metadata_addr
+            isFungible ? formData.selectedToken : null, // metadata_addr (for fungible assets) or None (for coins)
             amountInRawUnits // amount
           ],
-          typeArguments: isFungible ? [] : [metadataAddr]
+          typeArguments: isFungible ? [] : [formData.selectedToken] // coin type for coins, empty for fungible assets
         }
       })
 
@@ -986,6 +1029,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
         receiver: '',
         amount: ''
       })
+      setIsAddressVerified(false)
       
       // Refresh withdrawal requests
       await loadWithdrawalRequests()
@@ -1181,6 +1225,24 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     }
   }, [selectedAccount, loadWithdrawalRequests])
 
+  // Auto-collapse executed requests by default
+  useEffect(() => {
+    if (withdrawalRequests.length > 0) {
+      const executedIndices = withdrawalRequests
+        .map((request, index) => request.status?.__variant__ === 'Executed' ? index : -1)
+        .filter(index => index !== -1)
+      
+      if (executedIndices.length > 0) {
+        setCollapsedRequests(prev => {
+          const newSet = new Set(prev)
+          executedIndices.forEach(index => newSet.add(index))
+          return newSet
+        })
+      }
+    }
+  }, [withdrawalRequests])
+
+
   // Handle form submission
   const handleWithdrawalSubmit = useCallback((e: React.FormEvent) => {
     e.preventDefault()
@@ -1238,6 +1300,59 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     }
     return address
   }, [currentMsafeInfo])
+
+  // Toggle collapsed state for withdrawal requests
+  const toggleRequestCollapse = useCallback((requestIndex: number) => {
+    setCollapsedRequests(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(requestIndex)) {
+        newSet.delete(requestIndex)
+      } else {
+        newSet.add(requestIndex)
+      }
+      return newSet
+    })
+  }, [])
+
+  // Check if MSafe account is allowed to use the contract
+  const checkAccountAllowance = useCallback(async (msafeAddress: string): Promise<boolean> => {
+    try {
+      const result = await aptos.view({
+        payload: {
+          function: `${FK_MSAFE_MODULES}::drain::is_msafe_allowed`,
+          functionArguments: [msafeAddress],
+          typeArguments: []
+        }
+      })
+
+      console.log('Account allowance result for', msafeAddress, ':', result)
+      return result && result.length > 0 && result[0] === true
+    } catch (error) {
+      console.warn(`Failed to check allowance for ${msafeAddress}:`, error)
+      return false
+    }
+  }, [aptos])
+
+  // Check allowances for all MSafe accounts
+  const checkAllAccountAllowances = useCallback(async () => {
+    if (msafeAccounts.length === 0) return
+
+    const allowances = new Map<string, boolean>()
+    
+    for (const account of msafeAccounts) {
+      const isAllowed = await checkAccountAllowance(account.address)
+      allowances.set(account.address, isAllowed)
+    }
+    
+    setAccountAllowances(allowances)
+  }, [msafeAccounts, checkAccountAllowance])
+
+  // Check account allowances when MSafe accounts are loaded
+  useEffect(() => {
+    if (msafeAccounts.length > 0) {
+      checkAllAccountAllowances()
+    }
+  }, [msafeAccounts, checkAllAccountAllowances])
 
   if (!connected || !account?.address) {
     return null
@@ -1301,46 +1416,64 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {msafeAccounts.map((msafeAccount) => (
-            <div
-              key={msafeAccount.address}
-              className={`p-4 border rounded-lg cursor-pointer transition-colors ${
-                selectedAccountAddress === msafeAccount.address
-                  ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/20'
-                  : 'border-border hover:border-blue-300'
-              }`}
-              onClick={() => handleAccountSelect(msafeAccount)}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 rounded-full bg-green-500" />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-mono text-sm truncate">
-                        {msafeAccount.address}
-                      </span>
-                    </div>
-                    {msafeAccount.balances.length > 0 && (
-                      <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                        <Coins className="h-3 w-3" />
-                        <span>{msafeAccount.balances.length} tokens</span>
+          <TooltipProvider>
+            {msafeAccounts.map((msafeAccount) => {
+              const isAllowed = accountAllowances.get(msafeAccount.address) ?? true // Default to true if not checked yet
+              const isNotAllowed = accountAllowances.has(msafeAccount.address) && !isAllowed
+              
+              return (
+                <div
+                  key={msafeAccount.address}
+                  className={`p-4 border rounded-lg cursor-pointer transition-colors ${
+                    selectedAccountAddress === msafeAccount.address
+                      ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/20'
+                      : 'border-border hover:border-blue-300'
+                  }`}
+                  onClick={() => handleAccountSelect(msafeAccount)}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      {isNotAllowed ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div className="w-3 h-3 rounded-full bg-yellow-500 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Ask Smart Contract administrator to whitelist your multisig account</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      ) : (
+                        <div className="w-3 h-3 rounded-full bg-green-500" />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-mono text-sm truncate">
+                            {msafeAccount.address}
+                          </span>
+                        </div>
+                        {msafeAccount.balances.length > 0 && (
+                          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                            <Coins className="h-3 w-3" />
+                            <span>{msafeAccount.balances.length} tokens</span>
+                          </div>
+                        )}
                       </div>
-                    )}
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleAccountSelect(msafeAccount)
+                      }}
+                    >
+                      Select
+                    </Button>
                   </div>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleAccountSelect(msafeAccount)
-                  }}
-                >
-                  Select
-                </Button>
-              </div>
-            </div>
-          ))}
+              )
+            })}
+          </TooltipProvider>
         </CardContent>
       </Card>
 
@@ -1385,6 +1518,15 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                     const availableAmount = parseFloat(balance.availableForWithdrawal || '0') / Math.pow(10, balance.decimals)
                     const isWithdrawable = parseFloat(balance.availableForWithdrawal || '0') > 0
                     
+                    // Debug logging
+                    console.log('Balance debug:', {
+                      symbol: balance.symbol,
+                      coinType: balance.coinType,
+                      availableForWithdrawal: balance.availableForWithdrawal,
+                      isWithdrawable,
+                      availableAmount
+                    })
+                    
                     return (
                       <div key={index} className="flex items-center justify-between p-2 bg-muted rounded">
                         <div className="flex-1 min-w-0">
@@ -1400,6 +1542,11 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                           {isWithdrawable && (
                             <div className="text-xs text-green-600 dark:text-green-400">
                               Allowed for withdrawal: {availableAmount.toFixed(balance.decimals)}
+                            </div>
+                          )}
+                          {!isWithdrawable && balance.availableForWithdrawal !== undefined && (
+                            <div className="text-xs text-red-600 dark:text-red-400">
+                              No withdrawal permission
                             </div>
                           )}
                         </div>
@@ -1451,9 +1598,24 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                     type="text"
                     placeholder="0x..."
                     value={withdrawalForm.receiver}
-                    onChange={(e) => setWithdrawalForm(prev => ({ ...prev, receiver: e.target.value }))}
+                    onChange={handleReceiverChange}
                     required
                   />
+                  {withdrawalForm.receiver && (
+                    <div className="flex items-center space-x-2">
+                      <Checkbox
+                        id="address-verification"
+                        checked={isAddressVerified}
+                        onCheckedChange={(checked: boolean) => setIsAddressVerified(checked)}
+                      />
+                      <Label 
+                        htmlFor="address-verification" 
+                        className="text-sm text-muted-foreground cursor-pointer"
+                      >
+                        I have verified the receiver address is correct
+                      </Label>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -1471,7 +1633,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
 
                 <Button
                   type="submit"
-                  disabled={!withdrawalForm.selectedToken || !withdrawalForm.receiver || !withdrawalForm.amount || isCreatingWithdrawal}
+                  disabled={!withdrawalForm.selectedToken || !withdrawalForm.receiver || !withdrawalForm.amount || !isAddressVerified || isCreatingWithdrawal}
                   className="w-full"
                 >
                   {isCreatingWithdrawal ? (
@@ -1529,6 +1691,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                     const tokenData = getTokenData(token);
                     const amount = request.amount ? parseFloat(request.amount) / Math.pow(10, tokenData?.decimals || 8) : 0;
                     const isExecuted = request.status?.__variant__ === 'Executed'
+                    const isCollapsed = collapsedRequests.has(index)
                     
                     // Check if there's a pending transaction for this request
                     let hasPendingTx = false
@@ -1570,35 +1733,65 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                     }
                     
                     return (
-                      <div key={index} className="p-3 border rounded-lg">
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-2">
-                            {isExecuted ? <CheckCircle className="h-4 w-4 text-green-500" /> : <AlertCircle className="h-4 w-4 text-yellow-500" />}
-                            <span className="text-sm font-medium">
-                              Status: {request.status?.__variant__ || 'Unknown'}
-                              {hasPendingTx && (
-                                <span className="ml-2 px-2 py-1 bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200 text-xs rounded">
-                                  Pending Msafe TX
-                                </span>
+                      <div key={index} className="border rounded-lg">
+                        <div 
+                          className={`p-3 cursor-pointer hover:bg-muted/50 transition-colors ${
+                            isExecuted ? 'bg-green-50 dark:bg-green-950/20' : ''
+                          }`}
+                          onClick={() => isExecuted && toggleRequestCollapse(index)}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              {isExecuted ? <CheckCircle className="h-4 w-4 text-green-500" /> : <AlertCircle className="h-4 w-4 text-yellow-500" />}
+                              <span className="text-sm font-medium">
+                                Status: {request.status?.__variant__ || 'Unknown'}
+                                {hasPendingTx && (
+                                  <span className="ml-2 px-2 py-1 bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200 text-xs rounded">
+                                    Pending Msafe TX
+                                  </span>
+                                )}
+                              </span>
+                              {isExecuted && (
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-muted-foreground">
+                                    {amount.toFixed(tokenData?.decimals || 8)} {tokenData?.symbol}
+                                  </span>
+                                  <ChevronDown 
+                                    className={`h-4 w-4 text-muted-foreground transition-transform ${
+                                      isCollapsed ? 'rotate-180' : ''
+                                    }`} 
+                                  />
+                                </div>
                               )}
-                            </span>
-                          </div>
-                          {msafeTransactions.length > 0 && (
-                            <div className="text-xs text-muted-foreground">
-                              <b>Sequence Number:</b> {msafeTransactions.map(tx => tx.sn).join(', ')}
                             </div>
-                          )}
-                          {(hasPayload && !hasPendingTx && !pendingTxInfo && !isExecuted) && (
-                            <LoadingButton
-                              size="sm"
-                              loading={isSigning}
-                              onClick={() => signAndSendWithdrawalRequest(index)}
-                              disabled={!signMessage || !connected}
-                            >
-                              {isSigning ? 'Signing & Sending...' : 'Sign & Send'}
-                            </LoadingButton>
-                          )}
+                            <div className="flex items-center gap-2">
+                              {msafeTransactions.length > 0 && (
+                                <div className="text-xs text-muted-foreground">
+                                  <b>Sequence Number:</b> {msafeTransactions.map(tx => tx.sn).join(', ')}
+                                </div>
+                              )}
+                              {(hasPayload && !hasPendingTx && !pendingTxInfo && !isExecuted) && (
+                                <LoadingButton
+                                  size="sm"
+                                  loading={isSigning}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    signAndSendWithdrawalRequest(index)
+                                  }}
+                                  disabled={!signMessage || !connected}
+                                >
+                                  {isSigning ? 'Signing & Sending...' : 'Sign & Send'}
+                                </LoadingButton>
+                              )}
+                            </div>
+                          </div>
                         </div>
+                        
+                        {/* Collapsible content */}
+                        {(!isExecuted || !isCollapsed) && (
+                          <div className={`px-3 pb-3 transition-all duration-200 ${
+                            isExecuted && isCollapsed ? 'max-h-0 overflow-hidden' : 'max-h-none'
+                          }`}>
                         <div className="space-y-1 text-xs text-muted-foreground">
                           <div><b>Amount:</b> {amount.toFixed(tokenData?.decimals || 8)} {tokenData?.symbol}</div>
                           <div><b>Token:</b> {tokenData?.symbol || 'N/A'}</div>
@@ -1652,27 +1845,39 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                             </span>
                                           </td>
                                           <td className="p-2">
-                                            {tx.signatures?.data.length !== registryData?.threshold.get(tx.sender.hex()) ? (
-                                              <LoadingButton 
-                                                loading={isSigning} 
-                                                size="sm" 
-                                                onClick={() => signAndSendWithdrawalRequest(index, tx)} 
-                                                disabled={tx.isSigned}
-                                                className="text-xs"
-                                              >
-                                                {tx.isSigned ? 'Waiting for other signatures' : 'Sign & Send'}
-                                              </LoadingButton>) 
-                                            : tx.sn <= (registryData?.sequenceNumbers.get(tx.sender.hex()) || 0n) && !(tx.expiration < new Date()) && (
-                                              <LoadingButton 
-                                                loading={isSigning} 
-                                                size="sm" 
-                                                onClick={() => sendFullSignedTransaction(tx)} 
-                                                disabled={tx.signatures?.data.length !== registryData?.threshold.get(tx.sender.hex())}
-                                                className="text-xs"
-                                              >
-                                                {tx.signatures?.data.length !== registryData?.threshold.get(tx.sender.hex()) ? 'Not All Signatures' : 'Broadcast'}
-                                              </LoadingButton>
-                                            )}
+                                            {(() => {
+                                              const hasAllSignatures = tx.signatures?.data.length === registryData?.threshold.get(tx.sender.hex())
+                                              const isReadyForBroadcast = hasAllSignatures && tx.sn <= (registryData?.sequenceNumbers.get(tx.sender.hex()) || 0n) && !(tx.expiration < new Date())
+                                              
+                                              if (isReadyForBroadcast) {
+                                                // Show broadcast button when ready
+                                                return (
+                                                  <LoadingButton 
+                                                    loading={isSigning} 
+                                                    size="sm" 
+                                                    onClick={() => sendFullSignedTransaction(tx)} 
+                                                    disabled={!hasAllSignatures}
+                                                    className="text-xs"
+                                                  >
+                                                    Send Multisig Tx
+                                                  </LoadingButton>
+                                                )
+                                              } else if (tx.signatures?.data.length !== registryData?.threshold.get(tx.sender.hex())) {
+                                                // Show sign button when not all signatures collected
+                                                return (
+                                                  <LoadingButton 
+                                                    loading={isSigning} 
+                                                    size="sm" 
+                                                    onClick={() => signAndSendWithdrawalRequest(index, tx)} 
+                                                    disabled={tx.isSigned}
+                                                    className="text-xs"
+                                                  >
+                                                    {tx.isSigned ? 'Waiting for other signatures' : 'Sign & Send'}
+                                                  </LoadingButton>
+                                                )
+                                              }
+                                              return null
+                                            })()}
                                           </td>
                                         </tr>
                                       ))}
@@ -1683,6 +1888,8 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                             </div>
                           )}
                         </div>
+                          </div>
+                        )}
                       </div>
                     )
                   })}
@@ -1783,17 +1990,51 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                       </td>
                                       <td className="p-2">
                                         <div className="flex flex-col gap-1">
-                                          <LoadingButton 
-                                            loading={false} 
-                                            size="sm" 
-                                            onClick={() => signAndSendWithdrawalRequest(0, tx)} 
-                                            disabled={tx.isSigned || isExpired}
-                                            className="text-xs"
-                                          >
-                                            {tx.isSigned ? 'Waiting for other signatures' : isExpired ? 'Expired' : 'Sign & Send'}
-                                          </LoadingButton>
-                                          {!isExpired ? (<>
-                                            {!tx.isSigned && <LoadingButton 
+                                          {(() => {
+                                            const hasAllSignatures = tx.signatures?.data.length === registryData?.threshold.get(tx.sender.hex())
+                                            const isReadyForBroadcast = hasAllSignatures && tx.sn <= (registryData?.sequenceNumbers.get(tx.sender.hex()) || 0n) && !isExpired
+                                            
+                                            if (isReadyForBroadcast) {
+                                              // Show broadcast button when ready
+                                              return (
+                                                <LoadingButton 
+                                                  loading={false} 
+                                                  size="sm" 
+                                                  onClick={() => sendFullSignedTransaction(tx)} 
+                                                  disabled={!hasAllSignatures}
+                                                  className="text-xs"
+                                                >
+                                                  Send Multisig Tx
+                                                </LoadingButton>
+                                              )
+                                            } else if (!isExpired && tx.signatures?.data.length !== registryData?.threshold.get(tx.sender.hex())) {
+                                              // Show sign button when not all signatures collected
+                                              return (
+                                                <LoadingButton 
+                                                  loading={false} 
+                                                  size="sm" 
+                                                  onClick={() => signAndSendWithdrawalRequest(0, tx)} 
+                                                  disabled={tx.isSigned}
+                                                  className="text-xs"
+                                                >
+                                                  {tx.isSigned ? 'Waiting for other signatures' : 'Sign & Send'}
+                                                </LoadingButton>
+                                              )
+                                            } else if (isExpired) {
+                                              return (
+                                                <span className="text-xs text-red-600 dark:text-red-400 text-center">
+                                                  Exp: {tx.expiration.toLocaleString()}
+                                                </span>
+                                              )
+                                            }
+                                            return null
+                                          })()}
+                                          {!isExpired && !(() => {
+                                            const hasAllSignatures = tx.signatures?.data.length === registryData?.threshold.get(tx.sender.hex())
+                                            const isReadyForBroadcast = hasAllSignatures && tx.sn <= (registryData?.sequenceNumbers.get(tx.sender.hex()) || 0n)
+                                            return isReadyForBroadcast
+                                          })() && !tx.isSigned && (
+                                            <LoadingButton 
                                               loading={false} 
                                               size="sm" 
                                               onClick={() => rejectMsafeTransaction(tx)} 
@@ -1801,21 +2042,6 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                               className="text-xs"
                                             >
                                               Reject
-                                            </LoadingButton>}</>
-                                          ) : (
-                                            <span className="text-xs text-red-600 dark:text-red-400 text-center">
-                                              Exp: {tx.expiration.toLocaleString()}
-                                            </span>
-                                          )}
-                                          {!isExpired && tx.signatures?.data.length === registryData?.threshold.get(tx.sender.hex()) && tx.sn <= (registryData.sequenceNumbers.get(tx.sender.hex()) || 0n) && (
-                                            <LoadingButton 
-                                              loading={false} 
-                                              size="sm" 
-                                              onClick={() => sendFullSignedTransaction(tx)} 
-                                              disabled={tx.signatures?.data.length !== registryData?.threshold.get(tx.sender.hex())}
-                                              className="text-xs"
-                                            >
-                                              {'Broadcast'}
                                             </LoadingButton>
                                           )}
                                         </div>
