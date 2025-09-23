@@ -90,6 +90,7 @@ interface WithdrawalRequest {
   type: {
     __variant__: string
     coin_type_name: string
+    metadata: string
   }
 }
 
@@ -730,7 +731,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
             ...item,
             type: {
               __variant__: item.type.__variant__,
-              coin_type_name: hex2a(item.type.coin_type_name)
+              coin_type_name: item.type.__variant__ !== 'Coin' ? item.type.metadata : hex2a(item.type.coin_type_name)
             }
           }
         })
