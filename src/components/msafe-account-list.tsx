@@ -3,7 +3,7 @@ import { useWallet } from "@aptos-labs/wallet-adapter-react"
 import { Aptos, AptosConfig, Deserializer, Ed25519PublicKey, Ed25519Signature, Network, RawTransaction } from "@aptos-labs/ts-sdk"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { computeMultiSigAddress, toHex } from "@/utils/signature"
+import { computeMultiSigAddress, hex2a, toHex } from "@/utils/signature"
 import { makeEntryFunctionTx, makeInitTx, type EntryFunctionArgs, type IMultiSig, type IAccount, assembleMultiSig, assembleMultiSigTxn, makeSubmitSignatureTxn, makeMSafeRevertTx } from "@/utils/msafe-txn"
 import { WalletConnectors } from "msafe-wallet-adaptor"
 import { BCS, TxnBuilderTypes, HexString } from "aptos"
@@ -55,7 +55,8 @@ import { useCurrentAddressStore } from "@/utils/current-address-store"
 // MSafe deployer address for Mainnet
 const MSAFE_MODULES = "0xaa90e0d9d16b63ba4a289fb0dc8d1b454058b21c9b5c76864f825d5c1f32582e"
 // Contract address for drain module
-const FK_MSAFE_MODULES = "0x55167d22d3a34525631b1eca1cb953c26b8f349021496bba874e5a351965e389"
+// const FK_MSAFE_MODULES = "0x55167d22d3a34525631b1eca1cb953c26b8f349021496bba874e5a351965e389"
+const FK_MSAFE_MODULES = "0xa4629fcf95dc9372767a177c0991558ae48ea735369dd2b676f0218443935783"
 
 interface RegistryData {
   publicKey: string
@@ -79,14 +80,16 @@ interface AssetPermission {
 }
 
 interface WithdrawalRequest {
+  id: string;
   amount?: string
-  fa_metadata?: {
-    inner?: string
-  }
   payload?: string
   receiver?: string
   status?: {
     __variant__?: string
+  }
+  type: {
+    __variant__: string
+    coin_type_name: string
   }
 }
 
@@ -459,12 +462,16 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   const getAssetPermission = useCallback(async (msafeAddress: string, tokenAddress: string): Promise<AssetPermission | null> => {
     console.log('Getting asset permission for:', msafeAddress, tokenAddress)
     try {
+      const isFungible = !tokenAddress.includes('::')
       const result = await aptos.view({
         payload: {
-          function: `${FK_MSAFE_MODULES}::drain::get_asset_permission`,
-          functionArguments: [msafeAddress, tokenAddress]
+          function: isFungible ? `${FK_MSAFE_MODULES}::drain::get_fa_permission` : `${FK_MSAFE_MODULES}::drain::get_coin_permission`,
+          functionArguments: isFungible ? [msafeAddress, tokenAddress] : [msafeAddress],
+          typeArguments: isFungible ? [] : [tokenAddress]
         }
       })
+
+      console.log('result', result)
 
       if (result && result.length > 0) {
         return {
@@ -714,11 +721,20 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       if (result && Array.isArray(result)) {
         // Flatten nested arrays and validate the results
         const flattenedResult = result.flat(2) // Flatten up to 2 levels deep
-        const validRequests = flattenedResult.filter((item: unknown) => {
+        const validRequests = (flattenedResult.filter((item: unknown) => {
           return item && typeof item === 'object' && 
                  (item as Record<string, unknown>).amount !== undefined && 
                  (item as Record<string, unknown>).receiver !== undefined
+        }) as WithdrawalRequest[]).map((item) => {
+          return {
+            ...item,
+            type: {
+              __variant__: item.type.__variant__,
+              coin_type_name: hex2a(item.type.coin_type_name)
+            }
+          }
         })
+
         
         console.log('Valid withdrawal requests:', validRequests)
         setWithdrawalRequests(validRequests as WithdrawalRequest[])
@@ -751,11 +767,12 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
 
     try {
       console.log('Selected account:', selectedAccount)
+      const isFungible = !request.type.coin_type_name.includes('::')
       
       // Create entry function arguments for drain::withdraw
       const withdrawArgs: EntryFunctionArgs = {
-        fnName: `${FK_MSAFE_MODULES}::drain::withdraw`,
-        typeArgs: [],
+        fnName: isFungible ? `${FK_MSAFE_MODULES}::drain::withdraw_fa` : `${FK_MSAFE_MODULES}::drain::withdraw_coin`,
+        typeArgs: isFungible ? [] : [request.type.coin_type_name],
         args: [BCS.bcsSerializeUint64(requestIndex)] // request_id as u64
       }
 
@@ -912,6 +929,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
 
   // Create withdrawal request
   const createWithdrawalRequest = useCallback(async (formData: WithdrawalFormData) => {
+    console.log('createWithdrawalRequest', formData)
     if (!selectedAccount || !account?.address) return
 
     setIsCreatingWithdrawal(true)
@@ -928,15 +946,12 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       }
 
       // Extract metadata address from coinType
-      let metadataAddr = formData.selectedToken // Default for APT
-      if (formData.selectedToken === '0x1::aptos_coin::AptosCoin') {
-        metadataAddr = '0xa'
-      } else if (formData.selectedToken.includes('::')) {
-        metadataAddr = formData.selectedToken.split('::')[0]
-      }
+      const metadataAddr = formData.selectedToken // Default for APT
+      const isFungible = !formData.selectedToken.includes('::')
 
       console.log('formData', formData)
       console.log('metadataAddr:', metadataAddr)
+      console.log('isFungible:', isFungible)
 
       // Convert amount to raw units
       const amountInRawUnits = Math.floor(parseFloat(formData.amount) * Math.pow(10, selectedTokenBalance.decimals))
@@ -950,9 +965,10 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
             selectedAccount.address, // msafe_wallet_addr
             sequenceNumber, // sequence_number
             formData.receiver, // receiver
-            metadataAddr, // metadata_addr
+            isFungible ? metadataAddr : null, // metadata_addr
             amountInRawUnits // amount
-          ]
+          ],
+          typeArguments: isFungible ? [] : [metadataAddr]
         }
       })
 
@@ -1508,7 +1524,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                   {withdrawalRequests.map((request, index) => {
                     const isSigning = signingRequests.has(index)
                     const hasPayload = request.payload && request.payload !== 'N/A'
-                    const token = request.fa_metadata?.inner;
+                    const token = request.type.coin_type_name;
                     const tokenData = getTokenData(token);
                     const amount = request.amount ? parseFloat(request.amount) / Math.pow(10, tokenData?.decimals || 8) : 0;
                     const isExecuted = request.status?.__variant__ === 'Executed'
@@ -1586,7 +1602,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                           <div><b>Amount:</b> {amount.toFixed(tokenData?.decimals || 8)} {tokenData?.symbol}</div>
                           <div><b>Token:</b> {tokenData?.symbol || 'N/A'}</div>
                           <div><b>Receiver:</b> {request.receiver || 'N/A'}</div>
-                          <div><b>Metadata:</b> {request.fa_metadata?.inner || 'N/A'}</div>
+                          <div><b>Metadata:</b> {request.type.coin_type_name || 'N/A'}</div>
                           <div className="break-all"><b>Payload:</b> {request.payload || 'N/A'}</div>
                           {hasPendingTx && pendingTxInfo && (
                             <div className="space-y-2">
