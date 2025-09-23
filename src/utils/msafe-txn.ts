@@ -1,5 +1,5 @@
 import { HexString, TxnBuilderTypes, BCS } from "aptos";
-import { HexBuffer, Transaction as MTransaction, type TEd25519Signature, type SimpleMap, type TEd25519PublicKey } from "./transaction";
+import { HexBuffer, Transaction as MTransaction, type TEd25519Signature, type SimpleMap, type TEd25519PublicKey, type RevertArgs } from "./transaction";
 import type { Account } from "node_modules/@aptos-labs/ts-sdk/dist/esm/api/account.d.mts";
 import { isHexEqual } from "@/components/msafe-account-list";
 import type { AccountAddress } from "@aptos-labs/ts-sdk";
@@ -56,6 +56,7 @@ export type Options = {
   maxGas?: bigint;
   gasPrice?: bigint;
   expirationSec?: number; // target = time.now() + expiration
+  expirationRaw?: number;
   sequenceNumber?: bigint;
   chainID?: number;
   estimateGasPrice?: boolean;
@@ -66,6 +67,7 @@ export type TxConfig = {
   maxGas: bigint;
   gasPrice: bigint;
   expirationSec: number; // target = time.now() + expiration
+  expirationRaw?: number;
   sequenceNumber: bigint;
   chainID: number;
   estimateGasPrice: boolean;
@@ -211,7 +213,7 @@ export class AptosEntryTxnBuilder {
       payload,
       this._config.maxGas,
       this._config.gasPrice,
-      BigInt(Math.floor(Date.now() / 1000) + this._config.expirationSec),
+      this._config.expirationRaw ? BigInt(this._config.expirationRaw) : BigInt(Math.floor(Date.now() / 1000) + this._config.expirationSec),
       new TxnBuilderTypes.ChainId(this._config.chainID)
     );
 
@@ -282,6 +284,7 @@ export async function applyDefaultOptions(
     chainID: chainID,
     estimateGasPrice: !!opts.estimateGasPrice,
     estimateMaxGas: !!opts.estimateMaxGas,
+    expirationRaw: opts.expirationRaw,
   };
 }
 
@@ -362,6 +365,26 @@ export async function makeSubmitSignatureTxn(
       BCS.bcsToBytes(sig),
     ])
     .build(signer);
+}
+
+export async function makeMSafeRevertTx(
+  sender: IMultiSig,
+  args: RevertArgs,
+  opts?: Options
+): Promise<MSafeTransaction> {
+  const config = await applyDefaultOptions(sender.address, opts);
+  // sequence number will override option sn
+  config.sequenceNumber = args.sn;
+  const txBuilder = new AptosEntryTxnBuilder();
+  const tx = await txBuilder
+    .addr(MSAFE_MODULES_ACCOUNT)
+    .module(MODULES.MOMENTUM_SAFE)
+    .method(FUNCTIONS.MSAFE_REVERT)
+    .from(sender.address)
+    .withTxConfig(config)
+    .args([])
+    .build(sender);
+  return new MSafeTransaction(tx.raw);
 }
 
 /**

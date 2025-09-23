@@ -4,7 +4,7 @@ import { Aptos, AptosConfig, Deserializer, Ed25519PublicKey, Ed25519Signature, N
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { computeMultiSigAddress, toHex } from "@/utils/signature"
-import { makeEntryFunctionTx, makeInitTx, type EntryFunctionArgs, type IMultiSig, type IAccount, assembleMultiSig, assembleMultiSigTxn, makeSubmitSignatureTxn } from "@/utils/msafe-txn"
+import { makeEntryFunctionTx, makeInitTx, type EntryFunctionArgs, type IMultiSig, type IAccount, assembleMultiSig, assembleMultiSigTxn, makeSubmitSignatureTxn, makeMSafeRevertTx } from "@/utils/msafe-txn"
 import { WalletConnectors } from "msafe-wallet-adaptor"
 import { BCS, TxnBuilderTypes, HexString } from "aptos"
 
@@ -983,6 +983,90 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     }
   }, [selectedAccount, account, getSequenceNumber, loadWithdrawalRequests, signAndSubmitTransaction, aptos.transaction])
 
+  const rejectMsafeTransaction = useCallback(async (msafeTransaction: MSafeTxnInfo) => {
+    console.log('Rejecting msafe transactions:', msafeTransaction)
+    if (!selectedAccount || !account?.address) return
+    try {
+      const msafeAccount = await WalletConnectors['Pontem']();
+      const msafeAccountInterface: IMultiSig = {
+        address: new HexString(selectedAccount.address),
+      }
+      const rejectTransaction = await makeMSafeRevertTx(
+        msafeAccountInterface, 
+        { sn: msafeTransaction.sn },
+        {
+          maxGas: msafeTransaction.maxGas,
+          gasPrice: msafeTransaction.gasPrice,
+          expirationRaw: msafeTransaction.expirationRaw, // expiration
+          chainID: msafeTransaction.chainID, // mainnet,
+          sequenceNumber: msafeTransaction.sn,
+          estimateGasPrice: true,
+          estimateMaxGas: true
+        }
+      )
+      console.log('Reject transaction:', rejectTransaction)
+      const [p, s] = await msafeAccount.getSigData(rejectTransaction.raw)
+      console.log('Payload:', p)
+      console.log('Signature:', s)
+      const msafeInfo = await getMSafeInfo(selectedAccount.address)
+      if (!msafeInfo) {
+        throw new Error('Failed to get MSafe information')
+      }
+      // Find the index of the current account's public key
+      const currentAccountPubKey = account.publicKey?.toString() || ''
+      const pkIndex = msafeInfo.public_keys.findIndex((pk) => 
+        isHexEqual(pk, currentAccountPubKey)
+      )
+      
+      if (pkIndex === -1) {
+        throw new Error('Current account is not an owner of this MSafe')
+      }
+      
+      console.log('Found public key index:', pkIndex, 'for public key:', currentAccountPubKey)
+      const signerAccount: IAccount = {
+        address: new HexString(account.address.toString()),
+        publicKey: () => {
+          if (!account.publicKey) {
+            throw new Error("Public key not available from wallet");
+          }
+          // Convert the public key string to Ed25519PublicKey
+          const publicKeyBytes = new HexString(account.publicKey.toString()).toUint8Array();
+          return new TxnBuilderTypes.Ed25519PublicKey(publicKeyBytes);
+        }
+      };
+      const submitSignatureTx = await makeSubmitSignatureTxn(
+        signerAccount,
+        msafeTransaction.hash.hex(),
+        pkIndex,
+        new HexString(selectedAccount.address),
+        s,
+        {
+          maxGas: 100000n,
+          gasPrice: 100n,
+          expirationSec: 30, // 30 seconds
+          chainID: 1, // mainnet,
+          sequenceNumber: await getAccountSequenceNumber(account.address.toString()),
+          estimateGasPrice: true,
+          estimateMaxGas: true
+        }
+      )
+
+      const signedTx = await msafeAccount.sign(submitSignatureTx.raw)
+      const aptosClient = new (await import('aptos')).AptosClient('https://fullnode.mainnet.aptoslabs.com');
+      const txRes = await aptosClient.submitSignedBCSTransaction(signedTx)
+      console.log('Transaction submitted:', txRes)
+      const committedTx = await aptos.transaction.waitForTransaction({
+        transactionHash: txRes.hash
+      })
+      console.log('Committed transaction:', committedTx)
+      await loadWithdrawalRequests()
+      await checkRegistration();
+      return;
+    } catch (error) {
+      console.error('Failed to reject msafe transaction:', error)
+    }
+  }, [selectedAccount, account, loadWithdrawalRequests, checkRegistration, aptos.transaction, getMSafeInfo, getAccountSequenceNumber])
+
   // Load balances for selected account
   const loadAccountBalances = useCallback(async (account: MSafeAccount) => {
     if (account.isLoadingBalances) return
@@ -1351,6 +1435,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                     const token = request.fa_metadata?.inner;
                     const tokenData = getTokenData(token);
                     const amount = request.amount ? parseFloat(request.amount) / Math.pow(10, tokenData?.decimals || 8) : 0;
+                    const isExecuted = request.status?.__variant__ === 'Executed'
                     
                     // Check if there's a pending transaction for this request
                     let hasPendingTx = false
@@ -1410,7 +1495,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                               <b>Sequence Number:</b> {msafeTransactions.map(tx => tx.sn).join(', ')}
                             </div>
                           )}
-                          {(hasPayload && !hasPendingTx && !pendingTxInfo) && (
+                          {(hasPayload && !hasPendingTx && !pendingTxInfo && !isExecuted) && (
                             <LoadingButton
                               size="sm"
                               loading={isSigning}
@@ -1548,7 +1633,6 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                 {transactions.map((tx, txIndex) => {
                                   const threshold = registryData?.threshold.get(tx.sender.hex()) || 'N/A'
                                   const isExpired = tx.expiration.getTime() < new Date().getTime()
-                                  console.log('tx', tx)
                                   
                                   return (
                                     <tr key={`${sn}-${txIndex}`} className={`border-b ${isExpired ? 'bg-red-50 dark:bg-red-950/20' : ''}`}>
@@ -1603,9 +1687,21 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                           >
                                             {tx.isSigned ? 'Completed' : isExpired ? 'Expired' : 'Sign & Send'}
                                           </LoadingButton>
+                                          {!isExpired ? (
+                                            <LoadingButton 
+                                              loading={false} 
+                                              size="sm" 
+                                              onClick={() => rejectMsafeTransaction(tx)} 
+                                              disabled={tx.isSigned}
+                                              className="text-xs"
+                                            >
+                                              Reject
+                                            </LoadingButton>
+                                          ) : (
                                             <span className="text-xs text-red-600 dark:text-red-400 text-center">
                                               Exp: {tx.expiration.toLocaleString()}
                                             </span>
+                                          )}
                                         </div>
                                       </td>
                                     </tr>

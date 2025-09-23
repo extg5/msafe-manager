@@ -277,6 +277,7 @@ export class SignedMessage<T extends Serializable> {
     sender: HexString;
     sn: bigint;
     expiration: Date;
+    expirationRaw: number;
     chainID: number;
     gasPrice: bigint;
     maxGas: bigint;
@@ -308,6 +309,7 @@ export type TEd25519Signature = Types.Ed25519Signature['signature']
       hash: sha3_256(message.raw.toBytes()),
       chainID: migrationMessage.chain_id.value,
       expiration: new Date(),
+      expirationRaw: new Date().getTime(),
       sender: HexString.ensure(migrationMessage.account_address.toHexString()),
       gasPrice: 0n,
       maxGas: 0n,
@@ -424,6 +426,7 @@ function decodeTypeTag(tArg: TxnBuilderTypes.TypeTag): string {
       sender: HexString.fromUint8Array(tx.sender.address),
       sn: tx.sequence_number,
       expiration: secToDate(tx.expiration_timestamp_secs),
+      expirationRaw: Number(tx.expiration_timestamp_secs),
       chainID: tx.chain_id.value,
       gasPrice: tx.gas_unit_price,
       maxGas: tx.max_gas_amount,
