@@ -49,7 +49,7 @@ import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { List, Wallet, Coins, Send, AlertCircle, Clock, CheckCircle, ChevronDown } from "lucide-react"
+import { List, Wallet, Coins, Send, AlertCircle, Clock, CheckCircle, ChevronDown, Book } from "lucide-react"
 import { HexBuffer, MigrationProofMessage, MSafeTransaction, toMigrateTx, Transaction, TypeMessage, type MSafeTxnInfo, type SimpleMap, type TEd25519PublicKey, type TEd25519Signature } from "@/utils/transaction"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs"
 import { useCurrentAddressStore } from "@/utils/current-address-store"
@@ -1690,9 +1690,15 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
             </div>
 
             {/* Withdrawal Form */}
-            <div className="space-y-6 pt-6 pb-12">
-              <div className="text-lg font-semibold">Create Withdrawal Request</div>
-              <form onSubmit={handleWithdrawalSubmit} className="space-y-8">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Send className="h-5 w-5" />
+                  Create Withdrawal Request
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleWithdrawalSubmit} className="space-y-8">
                 <div className="space-y-3 pt-3">
                   <Label htmlFor="token-select">Select Asset</Label>
                   <Select
@@ -1846,12 +1852,20 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                     </>
                   )}
                 </Button>
-              </form>
-            </div>
+                </form>
+              </CardContent>
+            </Card>
 
             {/* Tabs for Withdrawal Requests and Pending Transactions */}
-            <div className="space-y-4">
-              <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Book className="h-5 w-5" />
+                  Withdrawal Requests & Pending Transactions
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
                 <TabsList className="grid w-full grid-cols-2">
                   <TabsTrigger value="withdrawal-requests" className="flex items-center gap-2">
                     <List className="h-4 w-4" />
@@ -2285,7 +2299,8 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                   )}
                 </TabsContent>
               </Tabs>
-            </div>
+              </CardContent>
+            </Card>
           </CardContent>
         </Card>
       )}
