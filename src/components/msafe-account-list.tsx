@@ -136,6 +136,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   const [collapsedRequests, setCollapsedRequests] = useState<Set<number>>(new Set())
   const [isAddressVerified, setIsAddressVerified] = useState(false)
   const [accountAllowances, setAccountAllowances] = useState<Map<string, boolean>>(new Map())
+  const [expandedPayloads, setExpandedPayloads] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     fetch('https://raw.githubusercontent.com/pontem-network/coins-registry/refs/heads/main/src/coins.json')
@@ -1314,6 +1315,19 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
     })
   }, [])
 
+  // Toggle payload expansion for withdrawal requests
+  const togglePayloadExpansion = useCallback((requestIndex: number) => {
+    setExpandedPayloads(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(requestIndex)) {
+        newSet.delete(requestIndex)
+      } else {
+        newSet.add(requestIndex)
+      }
+      return newSet
+    })
+  }, [])
+
   // Check if MSafe account is allowed to use the contract
   const checkAccountAllowance = useCallback(async (msafeAddress: string): Promise<boolean> => {
     try {
@@ -1416,7 +1430,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <TooltipProvider>
+          <TooltipProvider delayDuration={200}>
             {msafeAccounts.map((msafeAccount) => {
               const isAllowed = accountAllowances.get(msafeAccount.address) ?? true // Default to true if not checked yet
               const isNotAllowed = accountAllowances.has(msafeAccount.address) && !isAllowed
@@ -1443,7 +1457,14 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                           </TooltipContent>
                         </Tooltip>
                       ) : (
-                        <div className="w-3 h-3 rounded-full bg-green-500" />
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div className="w-3 h-3 rounded-full bg-green-500 cursor-help" />
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>Whitelisted</p>
+                          </TooltipContent>
+                        </Tooltip>
                       )}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
@@ -1512,8 +1533,9 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                   {selectedAccount.isLoadingBalances ? 'Loading balances...' : 'No tokens found'}
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {selectedAccount.balances.map((balance, index) => {
+                <TooltipProvider delayDuration={200}>
+                  <div className="space-y-2">
+                    {selectedAccount.balances.map((balance, index) => {
                     const totalAmount = parseFloat(balance.amount) / Math.pow(10, balance.decimals)
                     const availableAmount = parseFloat(balance.availableForWithdrawal || '0') / Math.pow(10, balance.decimals)
                     const isWithdrawable = parseFloat(balance.availableForWithdrawal || '0') > 0
@@ -1540,20 +1562,35 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                             {totalAmount.toFixed(balance.decimals)}
                           </div>
                           {isWithdrawable && (
-                            <div className="text-xs text-green-600 dark:text-green-400">
-                              Allowed for withdrawal: {availableAmount.toFixed(balance.decimals)}
-                            </div>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <div className="text-xs text-green-600 dark:text-green-400 cursor-help">
+                                  Allowed for withdrawal: {availableAmount.toFixed(balance.decimals)}
+                                </div>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>Allowed to withdraw amount. Contact Smart Contract administrator to increase withdrawal limits.</p>
+                              </TooltipContent>
+                            </Tooltip>
                           )}
                           {!isWithdrawable && balance.availableForWithdrawal !== undefined && (
-                            <div className="text-xs text-red-600 dark:text-red-400">
-                              No withdrawal permission
-                            </div>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <div className="text-xs text-red-600 dark:text-red-400 cursor-help">
+                                  No withdrawal permission
+                                </div>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>No withdrawal permission for this asset. Contact Smart Contract administrator to request withdrawal permissions.</p>
+                              </TooltipContent>
+                            </Tooltip>
                           )}
                         </div>
                       </div>
                     )
                   })}
-                </div>
+                  </div>
+                </TooltipProvider>
               )}
             </div>
 
@@ -1780,7 +1817,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                   }}
                                   disabled={!signMessage || !connected}
                                 >
-                                  {isSigning ? 'Signing & Sending...' : 'Sign & Send'}
+                                  {isSigning ? 'Creating Msafe Tx...' : 'Create Msafe Tx'}
                                 </LoadingButton>
                               )}
                             </div>
@@ -1793,11 +1830,29 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                             isExecuted && isCollapsed ? 'max-h-0 overflow-hidden' : 'max-h-none'
                           }`}>
                         <div className="space-y-1 text-xs text-muted-foreground">
-                          <div><b>Amount:</b> {amount.toFixed(tokenData?.decimals || 8)} {tokenData?.symbol}</div>
-                          <div><b>Token:</b> {tokenData?.symbol || 'N/A'}</div>
+                          <div><b>{request.type.__variant__ === 'Coin' ? 'Coin Amount' : 'FungibleAsset Amount'}:</b> {parseFloat(amount.toFixed(tokenData?.decimals || 8)).toString()} {tokenData?.symbol}</div>
                           <div><b>Receiver:</b> {request.receiver || 'N/A'}</div>
-                          <div><b>Metadata:</b> {request.type.coin_type_name || 'N/A'}</div>
-                          <div className="break-all"><b>Payload:</b> {request.payload || 'N/A'}</div>
+                          <div><b>{request.type.__variant__ === 'Coin' ? 'Coin' : 'Metadata'}:</b> {request.type.__variant__ === 'Coin' ? request.type.coin_type_name : request.type.metadata || 'N/A'}</div>
+                          <div>
+                            <div 
+                              className="cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1"
+                              onClick={() => togglePayloadExpansion(index)}
+                            >
+                              <b>Payload:</b> 
+                              {expandedPayloads.has(index) ? (
+                                <span className="text-xs text-muted-foreground">Click to collapse</span>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">
+                                  {request.payload ? `${request.payload.substring(0, 20)}...` : 'N/A'}
+                                </span>
+                              )}
+                            </div>
+                            {expandedPayloads.has(index) && request.payload && (
+                              <div className="break-all text-xs font-mono mt-1 p-2 bg-muted rounded">
+                                {request.payload}
+                              </div>
+                            )}
+                          </div>
                           {hasPendingTx && pendingTxInfo && (
                             <div className="space-y-2">
                               <b className="text-yellow-600 dark:text-yellow-400">Pending Transactions:</b>
