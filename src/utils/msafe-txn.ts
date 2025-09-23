@@ -512,10 +512,12 @@ export function assembleMultiSig(
   pubKeys: string[],
   sigs: SimpleMap<TEd25519PublicKey, TEd25519Signature>,
   currentAccountPubKey: string,
-  sig: TxnBuilderTypes.Ed25519Signature
+  sig?: TxnBuilderTypes.Ed25519Signature
 ) {
   const msh = new MultiSigHelper(pubKeys, sigs);
-  msh.addSig(currentAccountPubKey, sig);
+  if (sig) {
+    msh.addSig(currentAccountPubKey, sig);
+  }
   console.log('msh:', msh)
   return msh.assembleSignatures();
 }
@@ -531,10 +533,8 @@ export function assembleMultiSigTxn(
   const hb =
     typeof payload === "string" ? HexBuffer(payload) : Buffer.from(payload);
 
-  const signingTx = MTransaction.deserialize(hb);
+  const signingTx = MTransaction.deserialize(hb, true);
   console.log('signingTx:', signingTx)
-  // @ts-expect-error sender is not readonly
-  signingTx.raw.sender = TxnBuilderTypes.AccountAddress.fromHex(sender);
   const signedTx = new TxnBuilderTypes.SignedTransaction(
     signingTx.raw,
     authenticator

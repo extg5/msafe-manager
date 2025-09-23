@@ -47,7 +47,7 @@ import { LoadingButton } from "@/components/ui/loading-button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { List, Wallet, Coins, Send, AlertCircle, Clock } from "lucide-react"
+import { List, Wallet, Coins, Send, AlertCircle, Clock, CheckCircle } from "lucide-react"
 import { HexBuffer, MigrationProofMessage, MSafeTransaction, toMigrateTx, Transaction, TypeMessage, type MSafeTxnInfo, type SimpleMap, type TEd25519PublicKey, type TEd25519Signature } from "@/utils/transaction"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs"
 
@@ -801,35 +801,6 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       };
 
       if (msafeTransaction && msafeTransaction.signatures) {
-        // console.log('msafeTransaction:', msafeTransaction)
-        // console.log('msafeInfo:', msafeInfo)
-        // console.log('currentAccountPubKey:', currentAccountPubKey)
-        // console.log('s:', s)
-        // const multiSignature = assembleMultiSig(
-        //   msafeInfo.public_keys,
-        //   msafeTransaction.signatures,
-        //   currentAccountPubKey,
-        //   s
-        // );
-        // console.log('MultiSignature:', multiSignature)
-        // console.log('p:', p)
-        // console.log('msafeInfo.public_keys:', msafeInfo.public_keys)
-        // const [pk] = computeMultiSigAddress(
-        //   msafeInfo.public_keys,
-        //   msafeInfo.threshold,
-        //   BigInt(msafeInfo.nonce)
-        // );
-
-        // const bcsTxn = assembleMultiSigTxn(
-        //   p,
-        //   pk,
-        //   multiSignature,
-        //   account.address.toString()
-        // );
-
-        // console.log('MultiSignature:', multiSignature)
-        // console.log('BCS Transaction:', bcsTxn)
-
         const submitSignatureTx = await makeSubmitSignatureTxn(
           signerAccount,
           msafeTransaction.hash.hex(),
@@ -1096,6 +1067,58 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
       ))
     }
   }, [fetchAccountBalances])
+
+  const sendFullSignedTransaction = useCallback(async (msafeTransaction: MSafeTxnInfo) => {
+    console.log('msafeTransaction:', msafeTransaction)
+    if (!selectedAccount || !account?.address || !msafeTransaction.signatures) return
+    const msafeInfo = await getMSafeInfo(selectedAccount.address)
+    if (!msafeInfo) {
+      throw new Error('Failed to get MSafe information')
+    }
+    const signaturesAmount = msafeTransaction.signatures.data.length
+    if (signaturesAmount !== msafeInfo.threshold) {
+      console.log('Not all signatures are submitted')
+      return;
+    }
+    const currentAccountPubKey = account.publicKey?.toString() || ''
+    console.log('currentAccountPubKey:', currentAccountPubKey)
+    console.log('msafeInfo:', msafeInfo)
+    const serializer = new BCS.Serializer();
+    msafeTransaction.payload?.serialize(serializer)
+    
+    const multiSignature = assembleMultiSig(
+      msafeInfo.public_keys,
+      msafeTransaction.signatures,
+      currentAccountPubKey,
+    );
+    console.log('MultiSignature:', multiSignature)
+    console.log('msafeInfo.public_keys:', msafeInfo.public_keys)
+    const [pk] = computeMultiSigAddress(
+      msafeInfo.public_keys,
+      msafeInfo.threshold,
+      BigInt(msafeInfo.nonce)
+    );
+
+    const bcsTxn = assembleMultiSigTxn(
+      serializer.getBytes(),
+      pk,
+      multiSignature,
+      account.address.toString()
+    );
+
+    console.log('MultiSignature:', multiSignature)
+    console.log('BCS Transaction:', bcsTxn)
+    const aptosClient = new (await import('aptos')).AptosClient('https://fullnode.mainnet.aptoslabs.com');
+    const txRes = await aptosClient.submitSignedBCSTransaction(bcsTxn)
+    console.log('Transaction submitted:', txRes)
+    const committedTx = await aptos.transaction.waitForTransaction({
+      transactionHash: txRes.hash
+    })
+    console.log('Committed transaction:', committedTx)
+    await loadWithdrawalRequests()
+    await checkRegistration();
+    return;
+  }, [aptos.transaction, selectedAccount, account, getMSafeInfo, loadWithdrawalRequests, checkRegistration])
 
   useEffect(() => {
     console.log('Selected account:', selectedAccountAddress)
@@ -1480,12 +1503,12 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                       <div key={index} className="p-3 border rounded-lg">
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
-                            <AlertCircle className="h-4 w-4 text-yellow-500" />
+                            {isExecuted ? <CheckCircle className="h-4 w-4 text-green-500" /> : <AlertCircle className="h-4 w-4 text-yellow-500" />}
                             <span className="text-sm font-medium">
                               Status: {request.status?.__variant__ || 'Unknown'}
                               {hasPendingTx && (
                                 <span className="ml-2 px-2 py-1 bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200 text-xs rounded">
-                                  Pending TX
+                                  Pending Msafe TX
                                 </span>
                               )}
                             </span>
@@ -1522,7 +1545,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                       <tr className="border-b">
                                         <th className="text-left p-2">SN</th>
                                         <th className="text-left p-2">Signed</th>
-                                        <th className="text-left p-2">Who Signed</th>
+                                        <th className="text-left p-2">Signer</th>
                                         <th className="text-left p-2">Signatures</th>
                                         <th className="text-left p-2">Action</th>
                                       </tr>
@@ -1559,6 +1582,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                             </span>
                                           </td>
                                           <td className="p-2">
+                                            {tx.signatures?.data.length !== registryData?.threshold.get(tx.sender.hex()) ? (
                                             <LoadingButton 
                                               loading={isSigning} 
                                               size="sm" 
@@ -1566,8 +1590,18 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                               disabled={tx.isSigned}
                                               className="text-xs"
                                             >
-                                              {tx.isSigned ? 'Completed' : 'Sign & Send'}
+                                              {tx.isSigned ? 'Waiting for other signatures' : 'Sign & Send'}
+                                            </LoadingButton>) : (
+                                            <LoadingButton 
+                                              loading={isSigning} 
+                                              size="sm" 
+                                              onClick={() => sendFullSignedTransaction(tx)} 
+                                              disabled={tx.signatures?.data.length !== registryData?.threshold.get(tx.sender.hex())}
+                                              className="text-xs"
+                                            >
+                                              {tx.signatures?.data.length !== registryData?.threshold.get(tx.sender.hex()) ? 'Not All Signatures' : 'Broadcast'}
                                             </LoadingButton>
+                                            )}
                                           </td>
                                         </tr>
                                       ))}
@@ -1610,7 +1644,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                             <th className="text-left p-2">SN</th>
                             <th className="text-left p-2">Senders</th>
                             <th className="text-left p-2">Signed</th>
-                            <th className="text-left p-2">Who Signed</th>
+                            <th className="text-left p-2">Signer</th>
                             <th className="text-left p-2">Signatures</th>
                             <th className="text-left p-2">Actions</th>
                           </tr>
@@ -1685,10 +1719,10 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                             disabled={tx.isSigned || isExpired}
                                             className="text-xs"
                                           >
-                                            {tx.isSigned ? 'Completed' : isExpired ? 'Expired' : 'Sign & Send'}
+                                            {tx.isSigned ? 'Waiting for other signatures' : isExpired ? 'Expired' : 'Sign & Send'}
                                           </LoadingButton>
-                                          {!isExpired ? (
-                                            <LoadingButton 
+                                          {!isExpired ? (<>
+                                            {!tx.isSigned && <LoadingButton 
                                               loading={false} 
                                               size="sm" 
                                               onClick={() => rejectMsafeTransaction(tx)} 
@@ -1696,11 +1730,22 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                                               className="text-xs"
                                             >
                                               Reject
-                                            </LoadingButton>
+                                            </LoadingButton>}</>
                                           ) : (
                                             <span className="text-xs text-red-600 dark:text-red-400 text-center">
                                               Exp: {tx.expiration.toLocaleString()}
                                             </span>
+                                          )}
+                                          {!isExpired && tx.signatures?.data.length === registryData?.threshold.get(tx.sender.hex()) && (
+                                            <LoadingButton 
+                                              loading={false} 
+                                              size="sm" 
+                                              onClick={() => sendFullSignedTransaction(tx)} 
+                                              disabled={tx.signatures?.data.length !== registryData?.threshold.get(tx.sender.hex())}
+                                              className="text-xs"
+                                            >
+                                              {'Broadcast'}
+                                            </LoadingButton>
                                           )}
                                         </div>
                                       </td>

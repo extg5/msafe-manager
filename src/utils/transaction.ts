@@ -9,8 +9,8 @@ export class Transaction {
     this.raw = raw;
   }
 
-  static deserialize(rawTx: Uint8Array) {
-    const deserializer = new BCS.Deserializer(rawTx.slice(32)); // skip prefix, see TransactionBuilder.getSigningMessage
+  static deserialize(rawTx: Uint8Array, noSlice: boolean = false) {
+    const deserializer = new BCS.Deserializer(noSlice ? rawTx : rawTx.slice(32)); // skip prefix, see TransactionBuilder.getSigningMessage
     return new Transaction(
       TxnBuilderTypes.RawTransaction.deserialize(deserializer)
     );
