@@ -91,8 +91,8 @@ interface WithdrawalRequest {
   }
   type: {
     __variant__: string
-    coin_type_name: string
-    metadata: string
+    coin_type_name: string | { inner: string }
+    metadata?: string
   }
 }
 
@@ -137,6 +137,11 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
   const [isAddressVerified, setIsAddressVerified] = useState(false)
   const [accountAllowances, setAccountAllowances] = useState<Map<string, boolean>>(new Map())
   const [expandedPayloads, setExpandedPayloads] = useState<Set<number>>(new Set())
+
+  // Helper function to safely extract string value from coin_type_name
+  const getCoinTypeName = useCallback((coinTypeName: string | { inner: string }): string => {
+    return typeof coinTypeName === 'string' ? coinTypeName : coinTypeName?.inner || ''
+  }, [])
 
   useEffect(() => {
     fetch('https://raw.githubusercontent.com/pontem-network/coins-registry/refs/heads/main/src/coins.json')
@@ -776,7 +781,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
             ...item,
             type: {
               __variant__: item.type.__variant__,
-              coin_type_name: item.type.__variant__ !== 'Coin' ? item.type.metadata : hex2a(item.type.coin_type_name)
+              coin_type_name: item.type.__variant__ !== 'Coin' ? item.type.metadata : hex2a(getCoinTypeName(item.type.coin_type_name))
             }
           }
         })
@@ -813,12 +818,12 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
 
     try {
       console.log('Selected account:', selectedAccount)
-      const isFungible = !request.type.coin_type_name.includes('::')
+      const isFungible = !getCoinTypeName(request.type.coin_type_name).includes('::')
       
       // Create entry function arguments for drain::withdraw
       const withdrawArgs: EntryFunctionArgs = {
         fnName: isFungible ? `${FK_MSAFE_MODULES}::drain::withdraw_fa` : `${FK_MSAFE_MODULES}::drain::withdraw_coin`,
-        typeArgs: isFungible ? [] : [request.type.coin_type_name],
+        typeArgs: isFungible ? [] : [getCoinTypeName(request.type.coin_type_name)],
         args: [BCS.bcsSerializeUint64(requestIndex)] // request_id as u64
       }
 
@@ -1013,7 +1018,7 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
             isFungible ? formData.selectedToken : null, // metadata_addr (for fungible assets) or None (for coins)
             amountInRawUnits // amount
           ],
-          typeArguments: isFungible ? [] : [formData.selectedToken] // coin type for coins, empty for fungible assets
+          typeArguments: isFungible ? [`${FK_MSAFE_MODULES}::drain::NotACoin`] : [formData.selectedToken] // NotACoin placeholder for fungible assets, actual coin type for coins
         }
       })
 
@@ -1724,9 +1729,18 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                   {withdrawalRequests.map((request, index) => {
                     const isSigning = signingRequests.has(index)
                     const hasPayload = request.payload && request.payload !== 'N/A'
-                    const token = request.type.coin_type_name;
+                    const token = getCoinTypeName(request.type.coin_type_name);
                     const tokenData = getTokenData(token);
                     const amount = request.amount ? parseFloat(request.amount) / Math.pow(10, tokenData?.decimals || 8) : 0;
+                    
+                    // Debug: Log request structure to understand metadata field
+                    console.log('Request structure:', {
+                      variant: request.type.__variant__,
+                      coin_type_name: request.type.coin_type_name,
+                      coin_type_name_extracted: token,
+                      metadata: request.type.metadata,
+                      fullType: request.type
+                    });
                     const isExecuted = request.status?.__variant__ === 'Executed'
                     const isCollapsed = collapsedRequests.has(index)
                     
@@ -1832,7 +1846,9 @@ export function MSafeAccountList({ onAccountSelect }: MSafeAccountListProps) {
                         <div className="space-y-1 text-xs text-muted-foreground">
                           <div><b>{request.type.__variant__ === 'Coin' ? 'Coin Amount' : 'FungibleAsset Amount'}:</b> {parseFloat(amount.toFixed(tokenData?.decimals || 8)).toString()} {tokenData?.symbol}</div>
                           <div><b>Receiver:</b> {request.receiver || 'N/A'}</div>
-                          <div><b>{request.type.__variant__ === 'Coin' ? 'Coin' : 'Metadata'}:</b> {request.type.__variant__ === 'Coin' ? request.type.coin_type_name : request.type.metadata || 'N/A'}</div>
+                          <div><b>{request.type.__variant__ === 'Coin' ? 'Coin' : 'Metadata'}:</b> {request.type.__variant__ === 'Coin' ? 
+                            getCoinTypeName(request.type.coin_type_name) : 
+                            (request.type.metadata || getCoinTypeName(request.type.coin_type_name) || 'N/A')}</div>
                           <div>
                             <div 
                               className="cursor-pointer hover:text-blue-600 dark:hover:text-blue-400 flex items-center gap-1"
