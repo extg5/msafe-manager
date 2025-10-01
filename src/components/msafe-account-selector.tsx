@@ -28,7 +28,7 @@ export function MSafeAccountSelector({
   const aptosConfig = useMemo(() => new AptosConfig({ 
     network: Network.MAINNET, 
     clientConfig: {
-      API_KEY: 'AG-AKERERDAVJN5NUDRDEIWKYMKTEXO5TY11'
+      API_KEY: 'AG-3TPTRVGKABJ4NZQF1MUHZNHOSEMFQ256S'
     }
   }), [])
   const aptos = useMemo(() => new Aptos(aptosConfig), [aptosConfig])

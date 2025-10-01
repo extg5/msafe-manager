@@ -58,7 +58,7 @@ async function getNextSN(msafeAddress: string): Promise<bigint> {
     const aptosConfig = new AptosConfig({ 
       network: Network.MAINNET, 
       clientConfig: {
-        API_KEY: 'AG-AKERERDAVJN5NUDRDEIWKYMKTEXO5TY11'
+        API_KEY: 'AG-3TPTRVGKABJ4NZQF1MUHZNHOSEMFQ256S'
       }
     });
     const aptos = new Aptos(aptosConfig);
@@ -89,7 +89,7 @@ async function getAccountSequenceNumber(accountAddress: string): Promise<bigint>
     const aptosConfig = new AptosConfig({ 
       network: Network.MAINNET, 
       clientConfig: {
-        API_KEY: 'AG-AKERERDAVJN5NUDRDEIWKYMKTEXO5TY11'
+        API_KEY: 'AG-3TPTRVGKABJ4NZQF1MUHZNHOSEMFQ256S'
       }
     });
     const aptos = new Aptos(aptosConfig);
